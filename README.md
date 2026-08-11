@@ -46,7 +46,19 @@ make migrate-down     # roll back one migration
 make migrate-status   # show current version
 ```
 
+## Tests
+
+Repository integration tests run against a local PostgreSQL test database
+(`biomed_cmms_test`, created on demand from `TEST_DATABASE_URL`). They reuse the
+docker-compose Postgres instance and skip automatically when it is unreachable:
+
+```sh
+make db-up    # ensure Postgres is running
+make test
+```
+
 ## Project status
 
-**Sprint 2 — database foundation.** Schema for `tenants` and `users` in place.
-No business logic, auth, RFP, or API endpoints implemented yet.
+**Sprint 2.2 — repository boundary.** Tenant domain entity and PostgreSQL
+repository in place. No business logic, auth, RFP, or API endpoints implemented
+yet.
