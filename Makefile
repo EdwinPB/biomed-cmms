@@ -1,4 +1,4 @@
-.PHONY: dev api web db-up db-down db-logs build tidy test vet lint clean
+.PHONY: dev api web db-up db-down db-logs build tidy test vet lint clean migrate-up migrate-down migrate-status
 
 # -----------------------------------------------------------------------------
 # Setup / install
@@ -33,6 +33,15 @@ db-down: ## Stop PostgreSQL
 
 db-logs: ## Tail PostgreSQL logs
 	docker compose logs -f postgres
+
+migrate-up: ## Apply all pending database migrations
+	cd apps/api && go run ./cmd/migrate up
+
+migrate-down: ## Roll back one database migration
+	cd apps/api && go run ./cmd/migrate down
+
+migrate-status: ## Show current database migration version
+	cd apps/api && go run ./cmd/migrate status
 
 # -----------------------------------------------------------------------------
 # Build / test / lint

@@ -31,10 +31,22 @@ hospital staff submit and track biomedical equipment service requests.
 cp .env.example .env
 make install     # Go modules + npm deps
 make db-up       # start PostgreSQL
+make migrate-up  # apply database migrations
 make dev         # run API and web
+```
+
+## Database migrations
+
+Migrations live in `apps/api/internal/migrations` and are embedded into the Go
+binary via `embed`. Apply them with the `cmd/migrate` tool:
+
+```sh
+make migrate-up       # apply all pending migrations
+make migrate-down     # roll back one migration
+make migrate-status   # show current version
 ```
 
 ## Project status
 
-**Sprint 1 — repository foundation.** No business logic, auth, database models,
-RFP, or API endpoints implemented yet.
+**Sprint 2 — database foundation.** Schema for `tenants` and `users` in place.
+No business logic, auth, RFP, or API endpoints implemented yet.
