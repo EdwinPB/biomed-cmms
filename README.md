@@ -59,6 +59,8 @@ make test
 
 ## Project status
 
-**Sprint 3.3 — service request lifecycle.** Domain transition rules and request
-application service (`CreateRequest`, `TransitionRequest`) in place. No RFP,
-work orders, auth, HTTP endpoints, or frontend functionality implemented yet.
+**Sprint 3.4 — service request HTTP API.** `POST /api/v1/requests` and
+`PATCH /api/v1/requests/{id}/status` exposed. Request identity comes from
+`X-Tenant-ID`/`X-User-ID` headers (dev-only, isolated for later auth
+middleware). No RFP, work orders, real authentication, or frontend
+functionality yet.

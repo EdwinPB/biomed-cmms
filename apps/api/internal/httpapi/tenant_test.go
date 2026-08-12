@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/edwinpolo/biomed-cmms/api/internal/servicerequest"
 	"github.com/edwinpolo/biomed-cmms/api/internal/tenant"
 	"github.com/edwinpolo/biomed-cmms/api/internal/tenant/service"
 )
@@ -29,11 +30,21 @@ func (f *fakeTenantService) CreateTenant(ctx context.Context, params tenant.Crea
 
 func doRequest(t *testing.T, svc TenantService, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(svc)
+	h := NewHandler(svc, &stubRequestService{})
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+type stubRequestService struct{}
+
+func (s *stubRequestService) CreateRequest(context.Context, servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
+	return servicerequest.ServiceRequest{}, errors.New("stubRequestService: CreateRequest not configured")
+}
+
+func (s *stubRequestService) TransitionRequest(context.Context, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	return servicerequest.ServiceRequest{}, errors.New("stubRequestService: TransitionRequest not configured")
 }
 
 func TestCreateTenantSuccess(t *testing.T) {
