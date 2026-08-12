@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/edwinpolo/biomed-cmms/api/internal/rfp"
 	"github.com/edwinpolo/biomed-cmms/api/internal/servicerequest"
 	"github.com/edwinpolo/biomed-cmms/api/internal/tenant"
 )
@@ -29,14 +30,25 @@ type ServiceRequestService interface {
 	RequestHistory(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error)
 }
 
+// RFPService is the application use-case boundary for RFPs. Implementations are
+// the rfp service; the HTTP layer never touches the repository or PostgreSQL
+// directly.
+type RFPService interface {
+	CreateRFP(ctx context.Context, params rfp.CreateParams) (rfp.RFP, error)
+	TransitionRFP(ctx context.Context, tenantID, id uuid.UUID, to rfp.Status) (rfp.RFP, error)
+	GetRFP(ctx context.Context, tenantID, id uuid.UUID) (rfp.RFP, error)
+	GetRFPByServiceRequest(ctx context.Context, tenantID, serviceRequestID uuid.UUID) (rfp.RFP, error)
+}
+
 type handler struct {
 	tenants         TenantService
 	serviceRequests ServiceRequestService
+	rfps            RFPService
 }
 
 // NewHandler builds the HTTP handler with all routes registered.
-func NewHandler(tenants TenantService, serviceRequests ServiceRequestService) http.Handler {
-	h := &handler{tenants: tenants, serviceRequests: serviceRequests}
+func NewHandler(tenants TenantService, serviceRequests ServiceRequestService, rfps RFPService) http.Handler {
+	h := &handler{tenants: tenants, serviceRequests: serviceRequests, rfps: rfps}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", h.health)
@@ -44,6 +56,10 @@ func NewHandler(tenants TenantService, serviceRequests ServiceRequestService) ht
 	mux.Handle("POST /api/v1/requests", h.identity(http.HandlerFunc(h.createRequest)))
 	mux.Handle("PATCH /api/v1/requests/{id}/status", h.identity(http.HandlerFunc(h.transitionStatus)))
 	mux.Handle("GET /api/v1/requests/{id}/history", h.identity(http.HandlerFunc(h.requestHistory)))
+	mux.Handle("POST /api/v1/rfps", h.identity(http.HandlerFunc(h.createRFP)))
+	mux.Handle("PATCH /api/v1/rfps/{id}/status", h.identity(http.HandlerFunc(h.transitionRFPStatus)))
+	mux.Handle("GET /api/v1/rfps/{id}", h.identity(http.HandlerFunc(h.getRFP)))
+	mux.Handle("GET /api/v1/service-requests/{id}/rfp", h.identity(http.HandlerFunc(h.getRFPByServiceRequest)))
 	return mux
 }
 

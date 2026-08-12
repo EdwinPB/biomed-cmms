@@ -30,7 +30,7 @@ func (f *fakeTenantService) CreateTenant(ctx context.Context, params tenant.Crea
 
 func doRequest(t *testing.T, svc TenantService, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(svc, &stubRequestService{})
+	h := NewHandler(svc, &stubRequestService{}, &stubRFPService{})
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

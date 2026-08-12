@@ -18,6 +18,8 @@ import (
 	"github.com/edwinpolo/biomed-cmms/api/internal/config"
 	"github.com/edwinpolo/biomed-cmms/api/internal/database"
 	"github.com/edwinpolo/biomed-cmms/api/internal/httpapi"
+	rfppostgres "github.com/edwinpolo/biomed-cmms/api/internal/rfp/postgres"
+	rfpservice "github.com/edwinpolo/biomed-cmms/api/internal/rfp/service"
 	srpostgres "github.com/edwinpolo/biomed-cmms/api/internal/servicerequest/postgres"
 	srservice "github.com/edwinpolo/biomed-cmms/api/internal/servicerequest/service"
 	tenantpostgres "github.com/edwinpolo/biomed-cmms/api/internal/tenant/postgres"
@@ -42,9 +44,12 @@ func main() {
 	requestRepo := srpostgres.NewRepository(pool)
 	serviceRequests := srservice.New(requestRepo)
 
+	rfpRepo := rfppostgres.NewRepository(pool)
+	rfps := rfpservice.New(rfpRepo)
+
 	server := &http.Server{
 		Addr:              ":" + cfg.APIPort,
-		Handler:           httpapi.NewHandler(tenants, serviceRequests),
+		Handler:           httpapi.NewHandler(tenants, serviceRequests, rfps),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

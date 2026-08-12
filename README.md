@@ -59,7 +59,8 @@ make test
 
 ## Project status
 
-**Sprint 4.2 — read-only request history API.** `GET /api/v1/requests/{id}/history`
-returns the chronological audit trail; tenant-scoped, 404 for unknown/foreign
-requests. Transition behavior untouched. No RFP, real authentication, or
-frontend functionality yet.
+**Sprint 5.3 — RFP HTTP API.** Exposes the RFP workflow over HTTP, all
+tenant-scoped via dev identity headers (`X-Tenant-ID`, `X-User-ID`):
+`POST /api/v1/rfps` (create), `PATCH /api/v1/rfps/{id}/status` (transition),
+`GET /api/v1/rfps/{id}`, `GET /api/v1/service-requests/{id}/rfp`. No vendors,
+quotes, RFP history, real authentication, or frontend functionality yet.
