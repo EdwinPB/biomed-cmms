@@ -155,6 +155,66 @@ func TestGetByID(t *testing.T) {
 	}
 }
 
+func TestUpdateStatus(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	created := createRequest(t, repo, pool, tenantID)
+
+	got, err := repo.UpdateStatus(ctx, tenantID, created.ID, servicerequest.StatusAssigned)
+	if err != nil {
+		t.Fatalf("UpdateStatus() error = %v", err)
+	}
+	if got.Status != servicerequest.StatusAssigned {
+		t.Errorf("UpdateStatus() status = %q, want %q", got.Status, servicerequest.StatusAssigned)
+	}
+	if got.ID != created.ID {
+		t.Errorf("UpdateStatus() id = %v, want %v", got.ID, created.ID)
+	}
+}
+
+func TestUpdateStatusInvalidValueRejected(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	created := createRequest(t, repo, pool, tenantID)
+
+	_, err := repo.UpdateStatus(ctx, tenantID, created.ID, "bogus")
+	if err == nil {
+		t.Fatal("UpdateStatus() invalid status error = nil, want error")
+	}
+}
+
+func TestUpdateStatusWrongTenant(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantA := createTenant(t, pool)
+	tenantB := createTenant(t, pool)
+
+	created := createRequest(t, repo, pool, tenantA)
+
+	_, err := repo.UpdateStatus(ctx, tenantB, created.ID, servicerequest.StatusAssigned)
+	if !errors.Is(err, servicerequest.ErrNotFound) {
+		t.Errorf("UpdateStatus() across tenants error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestUpdateStatusNotFound(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	tenantID := createTenant(t, pool)
+
+	_, err := repo.UpdateStatus(context.Background(), tenantID, uuid.MustParse("00000000-0000-0000-0000-000000000001"), servicerequest.StatusAssigned)
+	if !errors.Is(err, servicerequest.ErrNotFound) {
+		t.Errorf("UpdateStatus() error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestGetByIDNotFound(t *testing.T) {
 	repo, pool := newTestRepo(t)
 	truncateTables(t, pool)

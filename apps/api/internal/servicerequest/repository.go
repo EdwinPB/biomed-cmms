@@ -12,5 +12,6 @@ import (
 type Repository interface {
 	Create(ctx context.Context, params CreateParams) (ServiceRequest, error)
 	GetByID(ctx context.Context, tenantID, id uuid.UUID) (ServiceRequest, error)
+	UpdateStatus(ctx context.Context, tenantID, id uuid.UUID, status Status) (ServiceRequest, error)
 	ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]ServiceRequest, error)
 }

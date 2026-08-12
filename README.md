@@ -59,6 +59,6 @@ make test
 
 ## Project status
 
-**Sprint 3.2 — service requests.** `service_requests` schema and PostgreSQL
-repository in place (tenant-isolated via composite FKs). No RFP, work orders,
-auth, HTTP endpoints, or frontend functionality implemented yet.
+**Sprint 3.3 — service request lifecycle.** Domain transition rules and request
+application service (`CreateRequest`, `TransitionRequest`) in place. No RFP,
+work orders, auth, HTTP endpoints, or frontend functionality implemented yet.

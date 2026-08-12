@@ -1,0 +1,304 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/edwinpolo/biomed-cmms/api/internal/servicerequest"
+)
+
+type fakeRepo struct {
+	createFn       func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
+	getByIDFn      func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error)
+	updateStatusFn func(ctx context.Context, tenantID, id uuid.UUID, status servicerequest.Status) (servicerequest.ServiceRequest, error)
+
+	lastGetTenantID    uuid.UUID
+	lastUpdateTenantID uuid.UUID
+	lastUpdateID       uuid.UUID
+	lastUpdateStatus   servicerequest.Status
+	updated            []uuid.UUID
+}
+
+func (f *fakeRepo) Create(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
+	if f.createFn != nil {
+		return f.createFn(ctx, params)
+	}
+	return servicerequest.ServiceRequest{}, errors.New("fakeRepo: Create not configured")
+}
+
+func (f *fakeRepo) GetByID(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error) {
+	f.lastGetTenantID = tenantID
+	if f.getByIDFn != nil {
+		return f.getByIDFn(ctx, tenantID, id)
+	}
+	return servicerequest.ServiceRequest{}, errors.New("fakeRepo: GetByID not configured")
+}
+
+func (f *fakeRepo) UpdateStatus(ctx context.Context, tenantID, id uuid.UUID, status servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	f.lastUpdateTenantID = tenantID
+	f.lastUpdateID = id
+	f.lastUpdateStatus = status
+	f.updated = append(f.updated, id)
+	if f.updateStatusFn != nil {
+		return f.updateStatusFn(ctx, tenantID, id, status)
+	}
+	return servicerequest.ServiceRequest{}, errors.New("fakeRepo: UpdateStatus not configured")
+}
+
+func (f *fakeRepo) ListByTenant(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	return nil, errors.New("fakeRepo: ListByTenant not configured")
+}
+
+func testRequest(tenantID, id uuid.UUID, status servicerequest.Status) servicerequest.ServiceRequest {
+	return servicerequest.ServiceRequest{ID: id, TenantID: tenantID, Status: status}
+}
+
+func TestCreateRequestSuccess(t *testing.T) {
+	var gotParams servicerequest.CreateParams
+	created := testRequest(uuid.MustParse("11111111-1111-1111-1111-111111111111"), uuid.Nil, servicerequest.StatusPending)
+	fake := &fakeRepo{createFn: func(_ context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
+		gotParams = params
+		return created, nil
+	}}
+	svc := New(fake)
+
+	params := validCreateParams()
+	got, err := svc.CreateRequest(context.Background(), params)
+	if err != nil {
+		t.Fatalf("CreateRequest() error = %v", err)
+	}
+	if got != created {
+		t.Errorf("CreateRequest() = %+v, want %+v", got, created)
+	}
+	if gotParams != params {
+		t.Errorf("CreateRequest() repo params = %+v, want %+v", gotParams, params)
+	}
+}
+
+func validCreateParams() servicerequest.CreateParams {
+	return servicerequest.CreateParams{
+		TenantID:    uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+		EquipmentID: uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+		Title:       "Pump not running",
+		Description: "Infusion pump reports error on startup.",
+		Priority:    servicerequest.PriorityHigh,
+		CreatedBy:   uuid.MustParse("33333333-3333-3333-3333-333333333333"),
+	}
+}
+
+func TestCreateRequestValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*servicerequest.CreateParams)
+		want   error
+	}{
+		{"missing tenant", func(p *servicerequest.CreateParams) { p.TenantID = uuid.Nil }, ErrTenantRequired},
+		{"missing equipment", func(p *servicerequest.CreateParams) { p.EquipmentID = uuid.Nil }, ErrEquipmentRequired},
+		{"missing created_by", func(p *servicerequest.CreateParams) { p.CreatedBy = uuid.Nil }, ErrCreatedByRequired},
+		{"empty title", func(p *servicerequest.CreateParams) { p.Title = "" }, ErrTitleRequired},
+		{"whitespace title", func(p *servicerequest.CreateParams) { p.Title = "   " }, ErrTitleRequired},
+		{"empty description", func(p *servicerequest.CreateParams) { p.Description = "" }, ErrDescriptionRequired},
+		{"invalid priority", func(p *servicerequest.CreateParams) { p.Priority = "urgent" }, ErrInvalidPriority},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			fake := &fakeRepo{createFn: func(context.Context, servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
+				called = true
+				return servicerequest.ServiceRequest{}, nil
+			}}
+			svc := New(fake)
+
+			params := validCreateParams()
+			tc.mutate(&params)
+
+			_, err := svc.CreateRequest(context.Background(), params)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("CreateRequest() error = %v, want %v", err, tc.want)
+			}
+			if called {
+				t.Error("CreateRequest() called repo despite invalid input")
+			}
+		})
+	}
+}
+
+func TestCreateRequestEmptyPriorityAllowed(t *testing.T) {
+	called := false
+	fake := &fakeRepo{createFn: func(context.Context, servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
+		called = true
+		return servicerequest.ServiceRequest{}, nil
+	}}
+	svc := New(fake)
+
+	params := validCreateParams()
+	params.Priority = ""
+
+	if _, err := svc.CreateRequest(context.Background(), params); err != nil {
+		t.Fatalf("CreateRequest() error = %v", err)
+	}
+	if !called {
+		t.Error("CreateRequest() did not call repo")
+	}
+}
+
+func TestTransitionRequestAllowed(t *testing.T) {
+	tests := []struct {
+		from, to servicerequest.Status
+	}{
+		{servicerequest.StatusPending, servicerequest.StatusAssigned},
+		{servicerequest.StatusPending, servicerequest.StatusCancelled},
+		{servicerequest.StatusAssigned, servicerequest.StatusInProgress},
+		{servicerequest.StatusAssigned, servicerequest.StatusCancelled},
+		{servicerequest.StatusInProgress, servicerequest.StatusResolved},
+		{servicerequest.StatusInProgress, servicerequest.StatusCancelled},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.from)+"->"+string(tc.to), func(t *testing.T) {
+			tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+			id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+			fake := &fakeRepo{
+				getByIDFn: func(_ context.Context, _, _ uuid.UUID) (servicerequest.ServiceRequest, error) {
+					return testRequest(tenantID, id, tc.from), nil
+				},
+				updateStatusFn: func(_ context.Context, _, _ uuid.UUID, status servicerequest.Status) (servicerequest.ServiceRequest, error) {
+					return testRequest(tenantID, id, status), nil
+				},
+			}
+			svc := New(fake)
+
+			got, err := svc.TransitionRequest(context.Background(), tenantID, id, tc.to)
+			if err != nil {
+				t.Fatalf("TransitionRequest() error = %v", err)
+			}
+			if got.Status != tc.to {
+				t.Errorf("status = %q, want %q", got.Status, tc.to)
+			}
+			if fake.lastUpdateStatus != tc.to {
+				t.Errorf("UpdateStatus() status = %q, want %q", fake.lastUpdateStatus, tc.to)
+			}
+			if fake.lastUpdateID != id {
+				t.Errorf("UpdateStatus() id = %v, want %v", fake.lastUpdateID, id)
+			}
+		})
+	}
+}
+
+func TestTransitionRequestInvalidRejected(t *testing.T) {
+	tests := []struct{ from, to servicerequest.Status }{
+		{servicerequest.StatusPending, servicerequest.StatusInProgress},
+		{servicerequest.StatusPending, servicerequest.StatusResolved},
+		{servicerequest.StatusAssigned, servicerequest.StatusPending},
+		{servicerequest.StatusAssigned, servicerequest.StatusResolved},
+		{servicerequest.StatusInProgress, servicerequest.StatusPending},
+		{servicerequest.StatusInProgress, servicerequest.StatusAssigned},
+		{servicerequest.StatusResolved, servicerequest.StatusPending},
+		{servicerequest.StatusCancelled, servicerequest.StatusPending},
+		{servicerequest.StatusResolved, servicerequest.StatusCancelled},
+		{servicerequest.StatusCancelled, servicerequest.StatusResolved},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.from)+"->"+string(tc.to), func(t *testing.T) {
+			tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+			id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+			fake := &fakeRepo{
+				getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+					return testRequest(tenantID, id, tc.from), nil
+				},
+				updateStatusFn: func(context.Context, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+					return servicerequest.ServiceRequest{}, nil
+				},
+			}
+			svc := New(fake)
+
+			_, err := svc.TransitionRequest(context.Background(), tenantID, id, tc.to)
+			if !errors.Is(err, servicerequest.ErrInvalidTransition) {
+				t.Fatalf("TransitionRequest() error = %v, want ErrInvalidTransition", err)
+			}
+			if len(fake.updated) != 0 {
+				t.Errorf("UpdateStatus() called %d times, want 0", len(fake.updated))
+			}
+		})
+	}
+}
+
+func TestTransitionRequestNotFoundPropagated(t *testing.T) {
+	fake := &fakeRepo{getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
+	}}
+	svc := New(fake)
+
+	_, err := svc.TransitionRequest(context.Background(),
+		uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+		uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+		servicerequest.StatusAssigned)
+	if !errors.Is(err, servicerequest.ErrNotFound) {
+		t.Errorf("TransitionRequest() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestTransitionRequestGetErrorPropagated(t *testing.T) {
+	wantErr := errors.New("connection reset")
+	fake := &fakeRepo{getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+		return servicerequest.ServiceRequest{}, wantErr
+	}}
+	svc := New(fake)
+
+	_, err := svc.TransitionRequest(context.Background(),
+		uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+		uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+		servicerequest.StatusAssigned)
+	if !errors.Is(err, wantErr) {
+		t.Errorf("TransitionRequest() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestTransitionRequestUpdateErrorPropagated(t *testing.T) {
+	tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	wantErr := errors.New("connection reset")
+	fake := &fakeRepo{
+		getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+			return testRequest(tenantID, id, servicerequest.StatusPending), nil
+		},
+		updateStatusFn: func(context.Context, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+			return servicerequest.ServiceRequest{}, wantErr
+		},
+	}
+	svc := New(fake)
+
+	_, err := svc.TransitionRequest(context.Background(), tenantID, id, servicerequest.StatusAssigned)
+	if !errors.Is(err, wantErr) {
+		t.Errorf("TransitionRequest() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestTransitionRequestTenantIDPassedToRepository(t *testing.T) {
+	tenantID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
+	id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	fake := &fakeRepo{
+		getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+			return testRequest(tenantID, id, servicerequest.StatusPending), nil
+		},
+		updateStatusFn: func(_ context.Context, _, _ uuid.UUID, status servicerequest.Status) (servicerequest.ServiceRequest, error) {
+			return testRequest(tenantID, id, status), nil
+		},
+	}
+	svc := New(fake)
+
+	if _, err := svc.TransitionRequest(context.Background(), tenantID, id, servicerequest.StatusAssigned); err != nil {
+		t.Fatalf("TransitionRequest() error = %v", err)
+	}
+	if fake.lastGetTenantID != tenantID {
+		t.Errorf("GetByID() tenant = %v, want %v", fake.lastGetTenantID, tenantID)
+	}
+	if fake.lastUpdateTenantID != tenantID {
+		t.Errorf("UpdateStatus() tenant = %v, want %v", fake.lastUpdateTenantID, tenantID)
+	}
+}

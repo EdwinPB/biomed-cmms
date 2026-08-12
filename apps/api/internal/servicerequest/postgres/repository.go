@@ -66,6 +66,19 @@ func (r *Repository) GetByID(ctx context.Context, tenantID, id uuid.UUID) (servi
 	return sr, nil
 }
 
+func (r *Repository) UpdateStatus(ctx context.Context, tenantID, id uuid.UUID, status servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	const query = `UPDATE service_requests SET status = $3 WHERE id = $1 AND tenant_id = $2 RETURNING ` + serviceRequestColumns
+
+	sr, err := scanServiceRequest(r.pool.QueryRow(ctx, query, id, tenantID, status))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
+	}
+	if err != nil {
+		return servicerequest.ServiceRequest{}, fmt.Errorf("update service request status: %w", err)
+	}
+	return sr, nil
+}
+
 func (r *Repository) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error) {
 	const query = `SELECT ` + serviceRequestColumns + ` FROM service_requests WHERE tenant_id = $1 ORDER BY created_at DESC, id`
 

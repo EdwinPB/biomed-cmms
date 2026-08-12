@@ -1,0 +1,88 @@
+// Package service implements service-request application/use-case logic.
+//
+// It depends only on the servicerequest domain boundary (the Repository
+// interface and domain rules), never on PostgreSQL or any infrastructure
+// package.
+package service
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	"github.com/google/uuid"
+
+	"github.com/edwinpolo/biomed-cmms/api/internal/servicerequest"
+)
+
+var (
+	ErrTenantRequired      = errors.New("service request: tenant is required")
+	ErrEquipmentRequired   = errors.New("service request: equipment is required")
+	ErrCreatedByRequired   = errors.New("service request: created_by is required")
+	ErrTitleRequired       = errors.New("service request: title is required")
+	ErrDescriptionRequired = errors.New("service request: description is required")
+	ErrInvalidPriority     = errors.New("service request: invalid priority")
+)
+
+type Service struct {
+	repo servicerequest.Repository
+}
+
+func New(repo servicerequest.Repository) *Service {
+	return &Service{repo: repo}
+}
+
+// CreateRequest validates the request parameters and persists a new request.
+func (s *Service) CreateRequest(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
+	if err := validateCreate(params); err != nil {
+		return servicerequest.ServiceRequest{}, err
+	}
+	return s.repo.Create(ctx, params)
+}
+
+// TransitionRequest loads the request tenant-scoped, validates the status
+// change against the domain transition rules, and persists the new status.
+func (s *Service) TransitionRequest(ctx context.Context, tenantID, id uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	sr, err := s.repo.GetByID(ctx, tenantID, id)
+	if err != nil {
+		return servicerequest.ServiceRequest{}, err
+	}
+
+	if err := sr.TransitionTo(to); err != nil {
+		return servicerequest.ServiceRequest{}, err
+	}
+
+	return s.repo.UpdateStatus(ctx, tenantID, id, to)
+}
+
+func validateCreate(params servicerequest.CreateParams) error {
+	var errs []error
+	if params.TenantID == uuid.Nil {
+		errs = append(errs, ErrTenantRequired)
+	}
+	if params.EquipmentID == uuid.Nil {
+		errs = append(errs, ErrEquipmentRequired)
+	}
+	if params.CreatedBy == uuid.Nil {
+		errs = append(errs, ErrCreatedByRequired)
+	}
+	if strings.TrimSpace(params.Title) == "" {
+		errs = append(errs, ErrTitleRequired)
+	}
+	if strings.TrimSpace(params.Description) == "" {
+		errs = append(errs, ErrDescriptionRequired)
+	}
+	if !validPriority(params.Priority) {
+		errs = append(errs, ErrInvalidPriority)
+	}
+	return errors.Join(errs...)
+}
+
+func validPriority(p servicerequest.Priority) bool {
+	switch p {
+	case "", servicerequest.PriorityLow, servicerequest.PriorityMedium,
+		servicerequest.PriorityHigh, servicerequest.PriorityCritical:
+		return true
+	}
+	return false
+}
