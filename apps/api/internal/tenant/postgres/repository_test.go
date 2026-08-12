@@ -2,130 +2,21 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"fmt"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	pgxv5 "github.com/golang-migrate/migrate/v4/database/pgx/v5"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/edwinpolo/biomed-cmms/api/internal/migrations"
+	"github.com/edwinpolo/biomed-cmms/api/internal/dbtest"
 	"github.com/edwinpolo/biomed-cmms/api/internal/tenant"
 )
 
-// Integration tests against a local PostgreSQL test database. They reuse the
-// same docker-compose Postgres instance; if it is unreachable the suite is
-// skipped so `go test ./...` still passes on machines without Docker.
-
-var testPool *pgxpool.Pool
-
-func TestMain(m *testing.M) {
-	os.Exit(runTestSuite(m))
-}
-
-func runTestSuite(m *testing.M) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	url := testDatabaseURL()
-
-	if err := ensureTestDatabase(ctx, url); err != nil {
-		fmt.Printf("skipping tenant repository integration tests: %v\n", err)
-		return 0
-	}
-	if err := migrateTestDatabase(ctx, url); err != nil {
-		fmt.Printf("skipping tenant repository integration tests: %v\n", err)
-		return 0
-	}
-
-	pool, err := pgxpool.New(ctx, url)
-	if err != nil {
-		fmt.Printf("skipping tenant repository integration tests: %v\n", err)
-		return 0
-	}
-	defer pool.Close()
-	testPool = pool
-
-	return m.Run()
-}
-
-func testDatabaseURL() string {
-	if v := os.Getenv("TEST_DATABASE_URL"); v != "" {
-		return v
-	}
-	return "postgres://biomed:biomed@localhost:5432/biomed_cmms_test?sslmode=disable"
-}
-
-func ensureTestDatabase(ctx context.Context, url string) error {
-	cfg, err := pgxpool.ParseConfig(url)
-	if err != nil {
-		return err
-	}
-
-	name := cfg.ConnConfig.Database
-	cfg.ConnConfig.Database = "postgres"
-
-	conn, err := pgx.ConnectConfig(ctx, cfg.ConnConfig)
-	if err != nil {
-		return err
-	}
-	defer conn.Close(ctx)
-
-	var exists bool
-	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists); err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	_, err = conn.Exec(ctx, "CREATE DATABASE "+name)
-	return err
-}
-
-func migrateTestDatabase(ctx context.Context, url string) error {
-	db, err := sql.Open("pgx", url)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	src, err := iofs.New(migrations.FS, ".")
-	if err != nil {
-		return err
-	}
-
-	driver, err := pgxv5.WithInstance(db, &pgxv5.Config{})
-	if err != nil {
-		return err
-	}
-
-	m, err := migrate.NewWithInstance("iofs", src, "postgres", driver)
-	if err != nil {
-		return err
-	}
-	defer m.Close()
-
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return err
-	}
-	return nil
-}
-
-func newTestRepo(t *testing.T) *Repository {
+func newTestRepo(t *testing.T) (*Repository, *pgxpool.Pool) {
 	t.Helper()
-	if testPool == nil {
-		t.Skip("postgres not available")
-	}
-	return NewRepository(testPool)
+	pool := dbtest.Pool(t)
+	return NewRepository(pool), pool
 }
 
 func uniqueSlug(t *testing.T) string {
@@ -133,16 +24,16 @@ func uniqueSlug(t *testing.T) string {
 	return "t-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 }
 
-func truncateTables(t *testing.T) {
+func truncateTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := testPool.Exec(context.Background(), `TRUNCATE users, tenants`); err != nil {
+	if _, err := pool.Exec(context.Background(), `TRUNCATE equipment, users, tenants`); err != nil {
 		t.Fatalf("truncate tables: %v", err)
 	}
 }
 
 func TestCreate(t *testing.T) {
-	repo := newTestRepo(t)
-	truncateTables(t)
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
 	ctx := context.Background()
 
 	got, err := repo.Create(ctx, tenant.CreateParams{Slug: uniqueSlug(t), Name: "Acme Health"})
@@ -171,8 +62,8 @@ func TestCreate(t *testing.T) {
 }
 
 func TestGetByID(t *testing.T) {
-	repo := newTestRepo(t)
-	truncateTables(t)
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
 	ctx := context.Background()
 
 	created, err := repo.Create(ctx, tenant.CreateParams{Slug: uniqueSlug(t), Name: "Acme Health"})
@@ -190,8 +81,8 @@ func TestGetByID(t *testing.T) {
 }
 
 func TestGetBySlug(t *testing.T) {
-	repo := newTestRepo(t)
-	truncateTables(t)
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
 	ctx := context.Background()
 
 	created, err := repo.Create(ctx, tenant.CreateParams{Slug: uniqueSlug(t), Name: "Acme Health"})
@@ -209,8 +100,8 @@ func TestGetBySlug(t *testing.T) {
 }
 
 func TestGetByIDNotFound(t *testing.T) {
-	repo := newTestRepo(t)
-	truncateTables(t)
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
 
 	_, err := repo.GetByID(context.Background(), uuid.MustParse("00000000-0000-0000-0000-000000000001"))
 	if !errors.Is(err, tenant.ErrNotFound) {
@@ -219,8 +110,8 @@ func TestGetByIDNotFound(t *testing.T) {
 }
 
 func TestGetBySlugNotFound(t *testing.T) {
-	repo := newTestRepo(t)
-	truncateTables(t)
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
 
 	_, err := repo.GetBySlug(context.Background(), "does-not-exist")
 	if !errors.Is(err, tenant.ErrNotFound) {
@@ -229,8 +120,8 @@ func TestGetBySlugNotFound(t *testing.T) {
 }
 
 func TestCreateDuplicateSlug(t *testing.T) {
-	repo := newTestRepo(t)
-	truncateTables(t)
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
 	ctx := context.Background()
 
 	params := tenant.CreateParams{Slug: uniqueSlug(t), Name: "Acme Health"}

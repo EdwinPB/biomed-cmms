@@ -59,6 +59,6 @@ make test
 
 ## Project status
 
-**Sprint 2.3 — application layer.** Tenant use-case service (`CreateTenant`)
-in place above the repository boundary. No business logic, auth, RFP, or API
-endpoints implemented yet.
+**Sprint 3.1 — equipment domain.** `equipment` schema and PostgreSQL repository
+in place (tenant-isolated). No business logic, auth, RFP, service requests, or
+frontend functionality implemented yet.
