@@ -13,11 +13,11 @@ install: ## Install all dependencies (Go + Node)
 dev: db-up ## Run API + web in development
 	@set -e; \
 	trap 'kill $$API_PID' EXIT; \
-	cd apps/api && go run . & API_PID=$$!; \
+	cd apps/api && go run ./cmd/api & API_PID=$$!; \
 	cd apps/web && npm run dev
 
 api: ## Run Go API only
-	cd apps/api && go run .
+	cd apps/api && go run ./cmd/api
 
 web: ## Run Next.js web only
 	cd apps/web && npm run dev
