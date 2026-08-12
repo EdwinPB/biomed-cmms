@@ -68,6 +68,18 @@ func (s *Service) RequestHistory(ctx context.Context, tenantID, requestID uuid.U
 	return s.repo.ListEvents(ctx, tenantID, requestID)
 }
 
+// GetRequest returns a single request scoped to the tenant. Missing rows (or
+// rows owned by another tenant) surface as servicerequest.ErrNotFound.
+func (s *Service) GetRequest(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error) {
+	return s.repo.GetByID(ctx, tenantID, id)
+}
+
+// ListRequests returns the tenant's requests, newest first. The read path
+// adds no business logic; tenant scoping is delegated to the repository.
+func (s *Service) ListRequests(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	return s.repo.ListByTenant(ctx, tenantID)
+}
+
 func validateCreate(params servicerequest.CreateParams) error {
 	var errs []error
 	if params.TenantID == uuid.Nil {

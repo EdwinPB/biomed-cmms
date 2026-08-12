@@ -46,6 +46,22 @@ make migrate-down     # roll back one migration
 make migrate-status   # show current version
 ```
 
+## Local development identity
+
+The API authenticates requests via dev-only identity headers. The web app reads
+them from `apps/web/.env.local` (gitignored), so copy `apps/web/.env.example`
+there and fill in a real tenant/user. Tenant is created through the existing API
+endpoint; there is no user endpoint yet, so create the user in SQL:
+
+```sh
+# API running:  curl -s -X POST localhost:8080/api/v1/tenants -H 'Content-Type: application/json' \
+#               -d '{"slug":"local-dev","name":"Local Development"}'
+# Then capture the returned tenant id and run:
+docker exec -i biomed-cmms-postgres psql -U biomed -d biomed_cmms -c \
+  "INSERT INTO users (tenant_id, email, password_hash, full_name)
+   VALUES ('<tenant-id>', 'dev@local.test', 'dev-only', 'Dev User');"
+```
+
 ## Tests
 
 Repository integration tests run against a local PostgreSQL test database
@@ -59,8 +75,8 @@ make test
 
 ## Project status
 
-**Sprint 5.3 — RFP HTTP API.** Exposes the RFP workflow over HTTP, all
-tenant-scoped via dev identity headers (`X-Tenant-ID`, `X-User-ID`):
-`POST /api/v1/rfps` (create), `PATCH /api/v1/rfps/{id}/status` (transition),
-`GET /api/v1/rfps/{id}`, `GET /api/v1/service-requests/{id}/rfp`. No vendors,
-quotes, RFP history, real authentication, or frontend functionality yet.
+**Sprint 6.3 — Equipment selection.** New tenant-scoped `GET /api/v1/equipment`
+endpoint (repo `ListByTenant` already existed; added minimal `equipment/service`
+pass-through + HTTP route). `/requests/new` now uses an equipment selector
+rendering human-readable "Name — AssetTag" options and submits the real UUID.
+No equipment CRUD, filtering, pagination, or auth yet.

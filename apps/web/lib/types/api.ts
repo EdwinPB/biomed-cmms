@@ -45,6 +45,10 @@ export interface CreateServiceRequestInput {
   priority: RequestPriority;
 }
 
+export interface ServiceRequestList {
+  requests: ServiceRequest[];
+}
+
 export interface TransitionServiceRequestInput {
   status: RequestStatus;
 }
@@ -59,6 +63,23 @@ export interface RequestEvent {
 
 export interface RequestHistory {
   events: RequestEvent[];
+}
+
+export type EquipmentStatus = "operational" | "maintenance" | "retired";
+
+export interface Equipment {
+  id: string;
+  asset_tag: string;
+  name: string;
+  serial_number: string;
+  location: string;
+  status: EquipmentStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EquipmentList {
+  equipment: Equipment[];
 }
 
 export type RfpStatus = "draft" | "published" | "closed" | "cancelled";

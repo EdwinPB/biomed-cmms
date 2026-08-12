@@ -90,7 +90,7 @@ func (s *stubRFPService) GetRFPByServiceRequest(context.Context, uuid.UUID, uuid
 
 func doRFPSvc(t *testing.T, svc RFPService, method, target, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, &stubRequestService{}, svc)
+	h := NewHandler(&stubTenantService{}, &stubRequestService{}, svc, &stubEquipmentService{})
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])

@@ -20,9 +20,13 @@ type fakeRequestService struct {
 	createFn                                       func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
 	transitionFn                                   func(ctx context.Context, tenantID, id, actorID uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error)
 	requestHistoryFn                               func(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error)
+	getRequestFn                                   func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error)
+	listRequestsFn                                 func(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error)
 	gotCreateTenant, gotCreateUser                 uuid.UUID
 	gotTransitionTenant, gotTransitionID, gotActor uuid.UUID
 	gotHistoryTenant, gotHistoryRequest            uuid.UUID
+	gotGetTenant, gotGetID                         uuid.UUID
+	gotListTenant                                  uuid.UUID
 }
 
 func (f *fakeRequestService) CreateRequest(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
@@ -53,6 +57,23 @@ func (f *fakeRequestService) RequestHistory(ctx context.Context, tenantID, reque
 	return nil, errors.New("fakeRequestService: RequestHistory not configured")
 }
 
+func (f *fakeRequestService) GetRequest(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error) {
+	f.gotGetTenant = tenantID
+	f.gotGetID = id
+	if f.getRequestFn != nil {
+		return f.getRequestFn(ctx, tenantID, id)
+	}
+	return servicerequest.ServiceRequest{}, errors.New("fakeRequestService: GetRequest not configured")
+}
+
+func (f *fakeRequestService) ListRequests(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	f.gotListTenant = tenantID
+	if f.listRequestsFn != nil {
+		return f.listRequestsFn(ctx, tenantID)
+	}
+	return nil, errors.New("fakeRequestService: ListRequests not configured")
+}
+
 const (
 	testTenantID = "11111111-1111-1111-1111-111111111111"
 	testUserID   = "22222222-2222-2222-2222-222222222222"
@@ -60,7 +81,7 @@ const (
 
 func doRequestSvc(t *testing.T, svc ServiceRequestService, method, target, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, svc, &stubRFPService{})
+	h := NewHandler(&stubTenantService{}, svc, &stubRFPService{}, &stubEquipmentService{})
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
@@ -498,6 +519,191 @@ func TestRequestHistoryInternalError(t *testing.T) {
 
 	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444/history",
 		"", "X-Tenant-ID", testTenantID)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if strings.Contains(rec.Body.String(), "connection reset") {
+		t.Errorf("body leaks internal error: %q", rec.Body.String())
+	}
+}
+
+func testServiceRequest() servicerequest.ServiceRequest {
+	return servicerequest.ServiceRequest{
+		ID:          uuid.MustParse("44444444-4444-4444-4444-444444444444"),
+		TenantID:    uuid.MustParse(testTenantID),
+		EquipmentID: uuid.MustParse("55555555-5555-5555-5555-555555555555"),
+		Title:       "MRI not starting",
+		Description: "Machine will not power on.",
+		Priority:    servicerequest.PriorityHigh,
+		Status:      servicerequest.StatusPending,
+		CreatedBy:   uuid.MustParse(testUserID),
+		CreatedAt:   mustTime("2026-08-12T10:00:00Z"),
+		UpdatedAt:   mustTime("2026-08-12T10:00:00Z"),
+	}
+}
+
+func TestGetRequestSuccess(t *testing.T) {
+	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+		return testServiceRequest(), nil
+	}}
+
+	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444",
+		"", "X-Tenant-ID", testTenantID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body requestResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.ID != uuid.MustParse("44444444-4444-4444-4444-444444444444") {
+		t.Errorf("id = %v", body.ID)
+	}
+	if body.Title != "MRI not starting" {
+		t.Errorf("title = %q", body.Title)
+	}
+	if body.Status != servicerequest.StatusPending {
+		t.Errorf("status = %q, want pending", body.Status)
+	}
+	if fake.gotGetTenant != uuid.MustParse(testTenantID) {
+		t.Errorf("GetRequest() tenant = %v, want %v", fake.gotGetTenant, testTenantID)
+	}
+	if fake.gotGetID != uuid.MustParse("44444444-4444-4444-4444-444444444444") {
+		t.Errorf("GetRequest() id = %v", fake.gotGetID)
+	}
+}
+
+func TestGetRequestMissingTenant(t *testing.T) {
+	fake := &fakeRequestService{}
+
+	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444", "")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestGetRequestInvalidUUID(t *testing.T) {
+	fake := &fakeRequestService{}
+
+	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests/not-a-uuid", "", "X-Tenant-ID", testTenantID)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestGetRequestNotFound(t *testing.T) {
+	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
+	}}
+
+	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444",
+		"", "X-Tenant-ID", testTenantID)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestGetRequestWrongTenantBehavesAsNotFound(t *testing.T) {
+	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
+	}}
+
+	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444",
+		"", "X-Tenant-ID", "99999999-9999-9999-9999-999999999999")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestGetRequestInternalError(t *testing.T) {
+	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+		return servicerequest.ServiceRequest{}, errors.New("connection reset")
+	}}
+
+	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444",
+		"", "X-Tenant-ID", testTenantID)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if strings.Contains(rec.Body.String(), "connection reset") {
+		t.Errorf("body leaks internal error: %q", rec.Body.String())
+	}
+}
+
+func TestListRequestsSuccess(t *testing.T) {
+	second := testServiceRequest()
+	second.ID = uuid.MustParse("77777777-7777-7777-7777-777777777777")
+	second.Title = "Infusion pump alarm"
+	second.Status = servicerequest.StatusResolved
+	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+		return []servicerequest.ServiceRequest{testServiceRequest(), second}, nil
+	}}
+
+	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests", "", "X-Tenant-ID", testTenantID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body requestListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(body.Requests))
+	}
+	if body.Requests[0].Title != "MRI not starting" || body.Requests[1].Title != "Infusion pump alarm" {
+		t.Errorf("requests order/titles wrong: %+v", body.Requests)
+	}
+	if fake.gotListTenant != uuid.MustParse(testTenantID) {
+		t.Errorf("ListRequests() tenant = %v, want %v", fake.gotListTenant, testTenantID)
+	}
+}
+
+func TestListRequestsEmpty(t *testing.T) {
+	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+		return []servicerequest.ServiceRequest{}, nil
+	}}
+
+	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests", "", "X-Tenant-ID", testTenantID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var body requestListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Requests == nil {
+		t.Error("requests = nil, want non-nil empty slice")
+	}
+	if len(body.Requests) != 0 {
+		t.Errorf("requests = %d, want 0", len(body.Requests))
+	}
+}
+
+func TestListRequestsMissingTenant(t *testing.T) {
+	fake := &fakeRequestService{}
+
+	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests", "")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestListRequestsInternalError(t *testing.T) {
+	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+		return nil, errors.New("connection reset")
+	}}
+
+	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests", "", "X-Tenant-ID", testTenantID)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)

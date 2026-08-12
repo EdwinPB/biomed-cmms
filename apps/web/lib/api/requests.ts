@@ -3,8 +3,17 @@ import {
   CreateServiceRequestInput,
   RequestHistory,
   ServiceRequest,
+  ServiceRequestList,
   TransitionServiceRequestInput,
 } from "../types/api";
+
+export function listServiceRequests(): Promise<ServiceRequestList> {
+  return api.get<ServiceRequestList>("/api/v1/requests");
+}
+
+export function getServiceRequest(id: string): Promise<ServiceRequest> {
+  return api.get<ServiceRequest>(`/api/v1/requests/${id}`);
+}
 
 export function createServiceRequest(
   input: CreateServiceRequestInput,

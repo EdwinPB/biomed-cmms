@@ -116,6 +116,10 @@ type requestHistoryResponse struct {
 	Events []requestEventResponse `json:"events"`
 }
 
+type requestListResponse struct {
+	Requests []requestResponse `json:"requests"`
+}
+
 func (h *handler) requestHistory(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := TenantIDFrom(r.Context())
 	if err != nil {
@@ -146,6 +150,48 @@ func (h *handler) requestHistory(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, requestHistoryResponse{Events: resp})
+}
+
+func (h *handler) getRequest(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := TenantIDFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request id")
+		return
+	}
+
+	got, err := h.serviceRequests.GetRequest(r.Context(), tenantID, id)
+	if err != nil {
+		h.writeRequestError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toRequestResponse(got))
+}
+
+func (h *handler) listRequests(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := TenantIDFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	requests, err := h.serviceRequests.ListRequests(r.Context(), tenantID)
+	if err != nil {
+		h.writeRequestError(w, err)
+		return
+	}
+
+	resp := make([]requestResponse, 0, len(requests))
+	for _, sr := range requests {
+		resp = append(resp, toRequestResponse(sr))
+	}
+	writeJSON(w, http.StatusOK, requestListResponse{Requests: resp})
 }
 
 func (h *handler) writeRequestError(w http.ResponseWriter, err error) {

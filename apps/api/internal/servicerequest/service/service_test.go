@@ -11,10 +11,11 @@ import (
 )
 
 type fakeRepo struct {
-	createFn     func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
-	getByIDFn    func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error)
-	transitionFn func(ctx context.Context, event servicerequest.RequestEvent) (servicerequest.ServiceRequest, error)
-	listEventsFn func(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error)
+	createFn       func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
+	getByIDFn      func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error)
+	transitionFn   func(ctx context.Context, event servicerequest.RequestEvent) (servicerequest.ServiceRequest, error)
+	listEventsFn   func(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error)
+	listByTenantFn func(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error)
 
 	lastGetTenantID  uuid.UUID
 	lastTransition   servicerequest.RequestEvent
@@ -47,7 +48,11 @@ func (f *fakeRepo) Transition(ctx context.Context, event servicerequest.RequestE
 	return servicerequest.ServiceRequest{}, errors.New("fakeRepo: Transition not configured")
 }
 
-func (f *fakeRepo) ListByTenant(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+func (f *fakeRepo) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	f.lastListTenantID = tenantID
+	if f.listByTenantFn != nil {
+		return f.listByTenantFn(ctx, tenantID)
+	}
 	return nil, errors.New("fakeRepo: ListByTenant not configured")
 }
 
@@ -392,5 +397,92 @@ func TestRequestHistoryRepoErrorPropagated(t *testing.T) {
 	_, err := svc.RequestHistory(context.Background(), uuid.New(), uuid.New())
 	if !errors.Is(err, wantErr) {
 		t.Errorf("RequestHistory() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestGetRequestForwardsTenantAndID(t *testing.T) {
+	tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	requestID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	want := testRequest(tenantID, requestID, servicerequest.StatusAssigned)
+	fake := &fakeRepo{getByIDFn: func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error) {
+		return want, nil
+	}}
+	svc := New(fake)
+
+	got, err := svc.GetRequest(context.Background(), tenantID, requestID)
+	if err != nil {
+		t.Fatalf("GetRequest() error = %v", err)
+	}
+	if got != want {
+		t.Errorf("GetRequest() = %+v, want %+v", got, want)
+	}
+	if fake.lastGetTenantID != tenantID {
+		t.Errorf("GetByID() tenant = %v, want %v", fake.lastGetTenantID, tenantID)
+	}
+}
+
+func TestGetRequestNotFoundPropagated(t *testing.T) {
+	fake := &fakeRepo{getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
+	}}
+	svc := New(fake)
+
+	_, err := svc.GetRequest(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, servicerequest.ErrNotFound) {
+		t.Errorf("GetRequest() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestListRequestsForwardsTenant(t *testing.T) {
+	tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	want := []servicerequest.ServiceRequest{
+		testRequest(tenantID, uuid.MustParse("22222222-2222-2222-2222-222222222222"), servicerequest.StatusPending),
+		testRequest(tenantID, uuid.MustParse("33333333-3333-3333-3333-333333333333"), servicerequest.StatusResolved),
+	}
+	fake := &fakeRepo{listByTenantFn: func(_ context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+		return want, nil
+	}}
+	svc := New(fake)
+
+	got, err := svc.ListRequests(context.Background(), tenantID)
+	if err != nil {
+		t.Fatalf("ListRequests() error = %v", err)
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("ListRequests() = %+v, want %+v", got, want)
+	}
+	if fake.lastListTenantID != tenantID {
+		t.Errorf("ListByTenant() tenant = %v, want %v", fake.lastListTenantID, tenantID)
+	}
+}
+
+func TestListRequestsForwardsEmptySlice(t *testing.T) {
+	fake := &fakeRepo{listByTenantFn: func(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+		return []servicerequest.ServiceRequest{}, nil
+	}}
+	svc := New(fake)
+
+	got, err := svc.ListRequests(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("ListRequests() error = %v", err)
+	}
+	if got == nil {
+		t.Error("ListRequests() returned nil, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("ListRequests() returned %d requests, want 0", len(got))
+	}
+}
+
+func TestListRequestsRepoErrorPropagated(t *testing.T) {
+	wantErr := errors.New("connection reset")
+	fake := &fakeRepo{listByTenantFn: func(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+		return nil, wantErr
+	}}
+	svc := New(fake)
+
+	_, err := svc.ListRequests(context.Background(), uuid.New())
+	if !errors.Is(err, wantErr) {
+		t.Errorf("ListRequests() error = %v, want %v", err, wantErr)
 	}
 }
