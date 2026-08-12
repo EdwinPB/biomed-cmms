@@ -124,6 +124,44 @@ func (r *Repository) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]se
 	return list, nil
 }
 
+// ListEvents returns the audit trail for a request, oldest first. The query is
+// tenant-scoped, and a request that does not exist (or belongs to another
+// tenant) is reported as ErrNotFound rather than as an empty history.
+func (r *Repository) ListEvents(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM service_requests WHERE id = $1 AND tenant_id = $2)`,
+		requestID, tenantID).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("check service request exists: %w", err)
+	}
+	if !exists {
+		return nil, servicerequest.ErrNotFound
+	}
+
+	const query = `SELECT id, tenant_id, request_id, actor_id, from_status, to_status, created_at
+		FROM request_events
+		WHERE tenant_id = $1 AND request_id = $2
+		ORDER BY created_at ASC, id ASC`
+	rows, err := r.pool.Query(ctx, query, tenantID, requestID)
+	if err != nil {
+		return nil, fmt.Errorf("list request events: %w", err)
+	}
+	defer rows.Close()
+
+	events := make([]servicerequest.RequestEvent, 0)
+	for rows.Next() {
+		var e servicerequest.RequestEvent
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.RequestID, &e.ActorID, &e.FromStatus, &e.ToStatus, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan request event row: %w", err)
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate request event rows: %w", err)
+	}
+	return events, nil
+}
+
 func scanServiceRequest(row pgx.Row) (servicerequest.ServiceRequest, error) {
 	var sr servicerequest.ServiceRequest
 	err := row.Scan(&sr.ID, &sr.TenantID, &sr.EquipmentID, &sr.Title, &sr.Description, &sr.Priority, &sr.Status,

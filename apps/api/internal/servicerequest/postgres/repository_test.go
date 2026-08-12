@@ -544,3 +544,120 @@ func createRequestErr(t *testing.T, repo *Repository, pool *pgxpool.Pool, tenant
 
 	return repo.Create(context.Background(), params)
 }
+
+func TestListEventsChronologicalOrder(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	sr := createRequest(t, repo, pool, tenantID)
+	actorID := createUser(t, pool, tenantID)
+
+	repo.Transition(ctx, servicerequest.RequestEvent{TenantID: tenantID, RequestID: sr.ID, ActorID: actorID, FromStatus: servicerequest.StatusPending, ToStatus: servicerequest.StatusAssigned})
+	repo.Transition(ctx, servicerequest.RequestEvent{TenantID: tenantID, RequestID: sr.ID, ActorID: actorID, FromStatus: servicerequest.StatusAssigned, ToStatus: servicerequest.StatusInProgress})
+
+	events, err := repo.ListEvents(ctx, tenantID, sr.ID)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("ListEvents() returned %d events, want 2", len(events))
+	}
+	if events[0].FromStatus != servicerequest.StatusPending || events[0].ToStatus != servicerequest.StatusAssigned {
+		t.Errorf("first event = %s->%s, want pending->assigned", events[0].FromStatus, events[0].ToStatus)
+	}
+	if events[1].FromStatus != servicerequest.StatusAssigned || events[1].ToStatus != servicerequest.StatusInProgress {
+		t.Errorf("second event = %s->%s, want assigned->in_progress", events[1].FromStatus, events[1].ToStatus)
+	}
+	if events[0].CreatedAt.After(events[1].CreatedAt) {
+		t.Errorf("events out of chronological order: %v then %v", events[0].CreatedAt, events[1].CreatedAt)
+	}
+	if events[0].ActorID != actorID || events[1].ActorID != actorID {
+		t.Errorf("event actors = %v, %v, want %v", events[0].ActorID, events[1].ActorID, actorID)
+	}
+}
+
+func TestListEventsTiebreakByID(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	sr := createRequest(t, repo, pool, tenantID)
+	actorID := createUser(t, pool, tenantID)
+
+	sameTime := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	for _, id := range []string{
+		"00000000-0000-0000-0000-00000000000a",
+		"00000000-0000-0000-0000-00000000000b",
+	} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO request_events (id, tenant_id, request_id, actor_id, from_status, to_status, created_at)
+			 VALUES ($1, $2, $3, $4, 'pending', 'assigned', $5)`,
+			uuid.MustParse(id), tenantID, sr.ID, actorID, sameTime); err != nil {
+			t.Fatalf("insert event: %v", err)
+		}
+	}
+
+	events, err := repo.ListEvents(ctx, tenantID, sr.ID)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("ListEvents() returned %d events, want 2", len(events))
+	}
+	if events[0].ID.String() > events[1].ID.String() {
+		t.Errorf("equal-timestamp events not ordered by id: %v then %v", events[0].ID, events[1].ID)
+	}
+}
+
+func TestListEventsEmptyReturnsNonNil(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	sr := createRequest(t, repo, pool, tenantID)
+
+	events, err := repo.ListEvents(ctx, tenantID, sr.ID)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if events == nil {
+		t.Error("ListEvents() returned nil, want non-nil empty slice")
+	}
+	if len(events) != 0 {
+		t.Errorf("ListEvents() returned %d events, want 0", len(events))
+	}
+}
+
+func TestListEventsWrongTenant(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantA := createTenant(t, pool)
+	tenantB := createTenant(t, pool)
+
+	sr := createRequest(t, repo, pool, tenantA)
+	actorID := createUser(t, pool, tenantA)
+	if _, err := repo.Transition(ctx, servicerequest.RequestEvent{TenantID: tenantA, RequestID: sr.ID, ActorID: actorID, FromStatus: servicerequest.StatusPending, ToStatus: servicerequest.StatusAssigned}); err != nil {
+		t.Fatalf("Transition() error = %v", err)
+	}
+
+	_, err := repo.ListEvents(ctx, tenantB, sr.ID)
+	if !errors.Is(err, servicerequest.ErrNotFound) {
+		t.Errorf("ListEvents() across tenants error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestListEventsUnknownRequest(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	tenantID := createTenant(t, pool)
+
+	_, err := repo.ListEvents(context.Background(), tenantID, uuid.MustParse("00000000-0000-0000-0000-000000000001"))
+	if !errors.Is(err, servicerequest.ErrNotFound) {
+		t.Errorf("ListEvents() unknown request error = %v, want ErrNotFound", err)
+	}
+}

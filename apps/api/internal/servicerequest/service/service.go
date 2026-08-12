@@ -61,6 +61,13 @@ func (s *Service) TransitionRequest(ctx context.Context, tenantID, id, actorID u
 	return s.repo.Transition(ctx, event)
 }
 
+// RequestHistory returns the audit trail for a request, oldest first. Tenant
+// scoping is delegated to the repository boundary; the read path adds no
+// business logic.
+func (s *Service) RequestHistory(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	return s.repo.ListEvents(ctx, tenantID, requestID)
+}
+
 func validateCreate(params servicerequest.CreateParams) error {
 	var errs []error
 	if params.TenantID == uuid.Nil {

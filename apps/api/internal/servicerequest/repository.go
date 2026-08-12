@@ -19,4 +19,5 @@ type Repository interface {
 	GetByID(ctx context.Context, tenantID, id uuid.UUID) (ServiceRequest, error)
 	Transition(ctx context.Context, event RequestEvent) (ServiceRequest, error)
 	ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]ServiceRequest, error)
+	ListEvents(ctx context.Context, tenantID, requestID uuid.UUID) ([]RequestEvent, error)
 }

@@ -14,10 +14,13 @@ type fakeRepo struct {
 	createFn     func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
 	getByIDFn    func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error)
 	transitionFn func(ctx context.Context, event servicerequest.RequestEvent) (servicerequest.ServiceRequest, error)
+	listEventsFn func(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error)
 
-	lastGetTenantID uuid.UUID
-	lastTransition  servicerequest.RequestEvent
-	transitioned    []uuid.UUID
+	lastGetTenantID  uuid.UUID
+	lastTransition   servicerequest.RequestEvent
+	transitioned     []uuid.UUID
+	lastListTenantID uuid.UUID
+	lastListRequest  uuid.UUID
 }
 
 func (f *fakeRepo) Create(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
@@ -46,6 +49,15 @@ func (f *fakeRepo) Transition(ctx context.Context, event servicerequest.RequestE
 
 func (f *fakeRepo) ListByTenant(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
 	return nil, errors.New("fakeRepo: ListByTenant not configured")
+}
+
+func (f *fakeRepo) ListEvents(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	f.lastListTenantID = tenantID
+	f.lastListRequest = requestID
+	if f.listEventsFn != nil {
+		return f.listEventsFn(ctx, tenantID, requestID)
+	}
+	return nil, errors.New("fakeRepo: ListEvents not configured")
 }
 
 func testRequest(tenantID, id uuid.UUID, status servicerequest.Status) servicerequest.ServiceRequest {
@@ -313,5 +325,72 @@ func TestTransitionRequestTenantAndActorPassedToRepository(t *testing.T) {
 	}
 	if fake.lastTransition.ActorID != actorID {
 		t.Errorf("Transition() event actor = %v, want %v", fake.lastTransition.ActorID, actorID)
+	}
+}
+
+func TestRequestHistoryForwardsTenantAndRequestID(t *testing.T) {
+	tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	requestID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	want := []servicerequest.RequestEvent{{ID: uuid.MustParse("33333333-3333-3333-3333-333333333333")}}
+	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+		return want, nil
+	}}
+	svc := New(fake)
+
+	got, err := svc.RequestHistory(context.Background(), tenantID, requestID)
+	if err != nil {
+		t.Fatalf("RequestHistory() error = %v", err)
+	}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("RequestHistory() = %+v, want %+v", got, want)
+	}
+	if fake.lastListTenantID != tenantID {
+		t.Errorf("ListEvents() tenant = %v, want %v", fake.lastListTenantID, tenantID)
+	}
+	if fake.lastListRequest != requestID {
+		t.Errorf("ListEvents() request id = %v, want %v", fake.lastListRequest, requestID)
+	}
+}
+
+func TestRequestHistoryForwardsEmptySlice(t *testing.T) {
+	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+		return []servicerequest.RequestEvent{}, nil
+	}}
+	svc := New(fake)
+
+	got, err := svc.RequestHistory(context.Background(), uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatalf("RequestHistory() error = %v", err)
+	}
+	if got == nil {
+		t.Error("RequestHistory() returned nil, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("RequestHistory() returned %d events, want 0", len(got))
+	}
+}
+
+func TestRequestHistoryNotFoundPropagated(t *testing.T) {
+	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+		return nil, servicerequest.ErrNotFound
+	}}
+	svc := New(fake)
+
+	_, err := svc.RequestHistory(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, servicerequest.ErrNotFound) {
+		t.Errorf("RequestHistory() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRequestHistoryRepoErrorPropagated(t *testing.T) {
+	wantErr := errors.New("connection reset")
+	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+		return nil, wantErr
+	}}
+	svc := New(fake)
+
+	_, err := svc.RequestHistory(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, wantErr) {
+		t.Errorf("RequestHistory() error = %v, want %v", err, wantErr)
 	}
 }

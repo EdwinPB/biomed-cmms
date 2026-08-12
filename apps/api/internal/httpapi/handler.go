@@ -26,6 +26,7 @@ type TenantService interface {
 type ServiceRequestService interface {
 	CreateRequest(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
 	TransitionRequest(ctx context.Context, tenantID, id, actorID uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error)
+	RequestHistory(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error)
 }
 
 type handler struct {
@@ -42,6 +43,7 @@ func NewHandler(tenants TenantService, serviceRequests ServiceRequestService) ht
 	mux.HandleFunc("POST /api/v1/tenants", h.createTenant)
 	mux.Handle("POST /api/v1/requests", h.identity(http.HandlerFunc(h.createRequest)))
 	mux.Handle("PATCH /api/v1/requests/{id}/status", h.identity(http.HandlerFunc(h.transitionStatus)))
+	mux.Handle("GET /api/v1/requests/{id}/history", h.identity(http.HandlerFunc(h.requestHistory)))
 	return mux
 }
 

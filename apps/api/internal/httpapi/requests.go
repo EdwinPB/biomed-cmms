@@ -104,6 +104,50 @@ func (h *handler) transitionStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toRequestResponse(updated))
 }
 
+type requestEventResponse struct {
+	ID         uuid.UUID             `json:"id"`
+	ActorID    uuid.UUID             `json:"actor_id"`
+	FromStatus servicerequest.Status `json:"from_status"`
+	ToStatus   servicerequest.Status `json:"to_status"`
+	CreatedAt  string                `json:"created_at"`
+}
+
+type requestHistoryResponse struct {
+	Events []requestEventResponse `json:"events"`
+}
+
+func (h *handler) requestHistory(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := TenantIDFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request id")
+		return
+	}
+
+	events, err := h.serviceRequests.RequestHistory(r.Context(), tenantID, id)
+	if err != nil {
+		h.writeRequestError(w, err)
+		return
+	}
+
+	resp := make([]requestEventResponse, 0, len(events))
+	for _, e := range events {
+		resp = append(resp, requestEventResponse{
+			ID:         e.ID,
+			ActorID:    e.ActorID,
+			FromStatus: e.FromStatus,
+			ToStatus:   e.ToStatus,
+			CreatedAt:  e.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+	writeJSON(w, http.StatusOK, requestHistoryResponse{Events: resp})
+}
+
 func (h *handler) writeRequestError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, servicerequest.ErrNotFound):

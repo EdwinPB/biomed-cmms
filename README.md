@@ -59,8 +59,7 @@ make test
 
 ## Project status
 
-**Sprint 4.1 — request event history + transactional transitions.** Status
-changes write an audit row to `request_events`. `TransitionRequest` applies the
-status update and event insert atomically inside one repository-owned
-transaction (optimistic `status` guard). Actor comes from `X-User-ID`. No RFP,
-real authentication, or frontend functionality yet.
+**Sprint 4.2 — read-only request history API.** `GET /api/v1/requests/{id}/history`
+returns the chronological audit trail; tenant-scoped, 404 for unknown/foreign
+requests. Transition behavior untouched. No RFP, real authentication, or
+frontend functionality yet.

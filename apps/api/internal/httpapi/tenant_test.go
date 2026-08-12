@@ -47,6 +47,10 @@ func (s *stubRequestService) TransitionRequest(context.Context, uuid.UUID, uuid.
 	return servicerequest.ServiceRequest{}, errors.New("stubRequestService: TransitionRequest not configured")
 }
 
+func (s *stubRequestService) RequestHistory(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	return nil, errors.New("stubRequestService: RequestHistory not configured")
+}
+
 func TestCreateTenantSuccess(t *testing.T) {
 	created := tenant.Tenant{
 		ID:        uuid.MustParse("9c5b7f0e-2b2c-4f1e-8a2f-5e0c1a2b3c4d"),
