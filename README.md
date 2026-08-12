@@ -59,8 +59,8 @@ make test
 
 ## Project status
 
-**Sprint 3.4 — service request HTTP API.** `POST /api/v1/requests` and
-`PATCH /api/v1/requests/{id}/status` exposed. Request identity comes from
-`X-Tenant-ID`/`X-User-ID` headers (dev-only, isolated for later auth
-middleware). No RFP, work orders, real authentication, or frontend
-functionality yet.
+**Sprint 4.1 — request event history + transactional transitions.** Status
+changes write an audit row to `request_events`. `TransitionRequest` applies the
+status update and event insert atomically inside one repository-owned
+transaction (optimistic `status` guard). Actor comes from `X-User-ID`. No RFP,
+real authentication, or frontend functionality yet.

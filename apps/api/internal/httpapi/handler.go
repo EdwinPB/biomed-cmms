@@ -25,7 +25,7 @@ type TenantService interface {
 // never touches the repository or PostgreSQL directly.
 type ServiceRequestService interface {
 	CreateRequest(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
-	TransitionRequest(ctx context.Context, tenantID, id uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error)
+	TransitionRequest(ctx context.Context, tenantID, id, actorID uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error)
 }
 
 type handler struct {

@@ -33,6 +33,17 @@ const (
 
 var ErrNotFound = errors.New("service request: not found")
 
+// RequestEvent is an audit record of a status transition on a service request.
+type RequestEvent struct {
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	RequestID  uuid.UUID
+	ActorID    uuid.UUID
+	FromStatus Status
+	ToStatus   Status
+	CreatedAt  time.Time
+}
+
 type ServiceRequest struct {
 	ID              uuid.UUID
 	TenantID        uuid.UUID

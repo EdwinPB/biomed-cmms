@@ -11,15 +11,13 @@ import (
 )
 
 type fakeRepo struct {
-	createFn       func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
-	getByIDFn      func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error)
-	updateStatusFn func(ctx context.Context, tenantID, id uuid.UUID, status servicerequest.Status) (servicerequest.ServiceRequest, error)
+	createFn     func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
+	getByIDFn    func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error)
+	transitionFn func(ctx context.Context, event servicerequest.RequestEvent) (servicerequest.ServiceRequest, error)
 
-	lastGetTenantID    uuid.UUID
-	lastUpdateTenantID uuid.UUID
-	lastUpdateID       uuid.UUID
-	lastUpdateStatus   servicerequest.Status
-	updated            []uuid.UUID
+	lastGetTenantID uuid.UUID
+	lastTransition  servicerequest.RequestEvent
+	transitioned    []uuid.UUID
 }
 
 func (f *fakeRepo) Create(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
@@ -37,15 +35,13 @@ func (f *fakeRepo) GetByID(ctx context.Context, tenantID, id uuid.UUID) (service
 	return servicerequest.ServiceRequest{}, errors.New("fakeRepo: GetByID not configured")
 }
 
-func (f *fakeRepo) UpdateStatus(ctx context.Context, tenantID, id uuid.UUID, status servicerequest.Status) (servicerequest.ServiceRequest, error) {
-	f.lastUpdateTenantID = tenantID
-	f.lastUpdateID = id
-	f.lastUpdateStatus = status
-	f.updated = append(f.updated, id)
-	if f.updateStatusFn != nil {
-		return f.updateStatusFn(ctx, tenantID, id, status)
+func (f *fakeRepo) Transition(ctx context.Context, event servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
+	f.lastTransition = event
+	f.transitioned = append(f.transitioned, event.RequestID)
+	if f.transitionFn != nil {
+		return f.transitionFn(ctx, event)
 	}
-	return servicerequest.ServiceRequest{}, errors.New("fakeRepo: UpdateStatus not configured")
+	return servicerequest.ServiceRequest{}, errors.New("fakeRepo: Transition not configured")
 }
 
 func (f *fakeRepo) ListByTenant(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
@@ -162,28 +158,38 @@ func TestTransitionRequestAllowed(t *testing.T) {
 		t.Run(string(tc.from)+"->"+string(tc.to), func(t *testing.T) {
 			tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 			id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+			actorID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
 			fake := &fakeRepo{
 				getByIDFn: func(_ context.Context, _, _ uuid.UUID) (servicerequest.ServiceRequest, error) {
 					return testRequest(tenantID, id, tc.from), nil
 				},
-				updateStatusFn: func(_ context.Context, _, _ uuid.UUID, status servicerequest.Status) (servicerequest.ServiceRequest, error) {
-					return testRequest(tenantID, id, status), nil
+				transitionFn: func(_ context.Context, _ servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
+					return testRequest(tenantID, id, tc.to), nil
 				},
 			}
 			svc := New(fake)
 
-			got, err := svc.TransitionRequest(context.Background(), tenantID, id, tc.to)
+			got, err := svc.TransitionRequest(context.Background(), tenantID, id, actorID, tc.to)
 			if err != nil {
 				t.Fatalf("TransitionRequest() error = %v", err)
 			}
 			if got.Status != tc.to {
 				t.Errorf("status = %q, want %q", got.Status, tc.to)
 			}
-			if fake.lastUpdateStatus != tc.to {
-				t.Errorf("UpdateStatus() status = %q, want %q", fake.lastUpdateStatus, tc.to)
+			if fake.lastTransition.ToStatus != tc.to {
+				t.Errorf("Transition() event to = %q, want %q", fake.lastTransition.ToStatus, tc.to)
 			}
-			if fake.lastUpdateID != id {
-				t.Errorf("UpdateStatus() id = %v, want %v", fake.lastUpdateID, id)
+			if fake.lastTransition.FromStatus != tc.from {
+				t.Errorf("Transition() event from = %q, want %q", fake.lastTransition.FromStatus, tc.from)
+			}
+			if fake.lastTransition.RequestID != id {
+				t.Errorf("Transition() event request id = %v, want %v", fake.lastTransition.RequestID, id)
+			}
+			if fake.lastTransition.TenantID != tenantID {
+				t.Errorf("Transition() event tenant = %v, want %v", fake.lastTransition.TenantID, tenantID)
+			}
+			if fake.lastTransition.ActorID != actorID {
+				t.Errorf("Transition() event actor = %v, want %v", fake.lastTransition.ActorID, actorID)
 			}
 		})
 	}
@@ -211,18 +217,18 @@ func TestTransitionRequestInvalidRejected(t *testing.T) {
 				getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
 					return testRequest(tenantID, id, tc.from), nil
 				},
-				updateStatusFn: func(context.Context, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+				transitionFn: func(context.Context, servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
 					return servicerequest.ServiceRequest{}, nil
 				},
 			}
 			svc := New(fake)
 
-			_, err := svc.TransitionRequest(context.Background(), tenantID, id, tc.to)
+			_, err := svc.TransitionRequest(context.Background(), tenantID, id, uuid.MustParse("33333333-3333-3333-3333-333333333333"), tc.to)
 			if !errors.Is(err, servicerequest.ErrInvalidTransition) {
 				t.Fatalf("TransitionRequest() error = %v, want ErrInvalidTransition", err)
 			}
-			if len(fake.updated) != 0 {
-				t.Errorf("UpdateStatus() called %d times, want 0", len(fake.updated))
+			if len(fake.transitioned) != 0 {
+				t.Errorf("Transition() called %d times, want 0", len(fake.transitioned))
 			}
 		})
 	}
@@ -237,6 +243,7 @@ func TestTransitionRequestNotFoundPropagated(t *testing.T) {
 	_, err := svc.TransitionRequest(context.Background(),
 		uuid.MustParse("11111111-1111-1111-1111-111111111111"),
 		uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+		uuid.MustParse("33333333-3333-3333-3333-333333333333"),
 		servicerequest.StatusAssigned)
 	if !errors.Is(err, servicerequest.ErrNotFound) {
 		t.Errorf("TransitionRequest() error = %v, want ErrNotFound", err)
@@ -253,13 +260,14 @@ func TestTransitionRequestGetErrorPropagated(t *testing.T) {
 	_, err := svc.TransitionRequest(context.Background(),
 		uuid.MustParse("11111111-1111-1111-1111-111111111111"),
 		uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+		uuid.MustParse("33333333-3333-3333-3333-333333333333"),
 		servicerequest.StatusAssigned)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("TransitionRequest() error = %v, want %v", err, wantErr)
 	}
 }
 
-func TestTransitionRequestUpdateErrorPropagated(t *testing.T) {
+func TestTransitionRequestTransitionErrorPropagated(t *testing.T) {
 	tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 	wantErr := errors.New("connection reset")
@@ -267,38 +275,43 @@ func TestTransitionRequestUpdateErrorPropagated(t *testing.T) {
 		getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
 			return testRequest(tenantID, id, servicerequest.StatusPending), nil
 		},
-		updateStatusFn: func(context.Context, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+		transitionFn: func(context.Context, servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
 			return servicerequest.ServiceRequest{}, wantErr
 		},
 	}
 	svc := New(fake)
 
-	_, err := svc.TransitionRequest(context.Background(), tenantID, id, servicerequest.StatusAssigned)
+	_, err := svc.TransitionRequest(context.Background(), tenantID, id,
+		uuid.MustParse("33333333-3333-3333-3333-333333333333"), servicerequest.StatusAssigned)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("TransitionRequest() error = %v, want %v", err, wantErr)
 	}
 }
 
-func TestTransitionRequestTenantIDPassedToRepository(t *testing.T) {
+func TestTransitionRequestTenantAndActorPassedToRepository(t *testing.T) {
 	tenantID := uuid.MustParse("99999999-9999-9999-9999-999999999999")
 	id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	actorID := uuid.MustParse("44444444-4444-4444-4444-444444444444")
 	fake := &fakeRepo{
 		getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
 			return testRequest(tenantID, id, servicerequest.StatusPending), nil
 		},
-		updateStatusFn: func(_ context.Context, _, _ uuid.UUID, status servicerequest.Status) (servicerequest.ServiceRequest, error) {
-			return testRequest(tenantID, id, status), nil
+		transitionFn: func(_ context.Context, _ servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
+			return testRequest(tenantID, id, servicerequest.StatusAssigned), nil
 		},
 	}
 	svc := New(fake)
 
-	if _, err := svc.TransitionRequest(context.Background(), tenantID, id, servicerequest.StatusAssigned); err != nil {
+	if _, err := svc.TransitionRequest(context.Background(), tenantID, id, actorID, servicerequest.StatusAssigned); err != nil {
 		t.Fatalf("TransitionRequest() error = %v", err)
 	}
 	if fake.lastGetTenantID != tenantID {
 		t.Errorf("GetByID() tenant = %v, want %v", fake.lastGetTenantID, tenantID)
 	}
-	if fake.lastUpdateTenantID != tenantID {
-		t.Errorf("UpdateStatus() tenant = %v, want %v", fake.lastUpdateTenantID, tenantID)
+	if fake.lastTransition.TenantID != tenantID {
+		t.Errorf("Transition() event tenant = %v, want %v", fake.lastTransition.TenantID, tenantID)
+	}
+	if fake.lastTransition.ActorID != actorID {
+		t.Errorf("Transition() event actor = %v, want %v", fake.lastTransition.ActorID, actorID)
 	}
 }

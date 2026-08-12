@@ -3,6 +3,8 @@ package servicerequest
 import (
 	"errors"
 	"fmt"
+
+	"github.com/google/uuid"
 )
 
 // ErrInvalidTransition is returned when a service request tries to move to a
@@ -33,13 +35,21 @@ func CanTransition(from, to Status) bool {
 	return m != nil && m[to]
 }
 
-// TransitionTo moves the request to the next status. It returns
-// ErrInvalidTransition (wrapped with the attempted move) when the transition
-// is not allowed and leaves the status unchanged.
-func (sr *ServiceRequest) TransitionTo(next Status) error {
-	if !CanTransition(sr.Status, next) {
-		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, sr.Status, next)
+// TransitionTo moves the request to the next status and records the actor who
+// performed the move. It returns ErrInvalidTransition (wrapped with the
+// attempted move) when the transition is not allowed and leaves the status
+// unchanged. On success it returns the audit event describing the change.
+func (sr *ServiceRequest) TransitionTo(next Status, actor uuid.UUID) (RequestEvent, error) {
+	from := sr.Status
+	if !CanTransition(from, next) {
+		return RequestEvent{}, fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, from, next)
 	}
 	sr.Status = next
-	return nil
+	return RequestEvent{
+		TenantID:   sr.TenantID,
+		RequestID:  sr.ID,
+		ActorID:    actor,
+		FromStatus: from,
+		ToStatus:   next,
+	}, nil
 }

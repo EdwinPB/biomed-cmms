@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -59,7 +60,7 @@ func createEquipment(t *testing.T, pool *pgxpool.Pool, tenantID uuid.UUID) uuid.
 
 func truncateTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), `TRUNCATE service_requests, equipment, users, tenants`); err != nil {
+	if _, err := pool.Exec(context.Background(), `TRUNCATE request_events, service_requests, equipment, users, tenants`); err != nil {
 		t.Fatalf("truncate tables: %v", err)
 	}
 }
@@ -155,63 +156,214 @@ func TestGetByID(t *testing.T) {
 	}
 }
 
-func TestUpdateStatus(t *testing.T) {
+func countEvents(t *testing.T, pool *pgxpool.Pool, tenantID, requestID uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM request_events WHERE tenant_id = $1 AND request_id = $2`,
+		tenantID, requestID).Scan(&n); err != nil {
+		t.Fatalf("count request events: %v", err)
+	}
+	return n
+}
+
+func getRequestStatus(t *testing.T, pool *pgxpool.Pool, tenantID, requestID uuid.UUID) servicerequest.Status {
+	t.Helper()
+	var status servicerequest.Status
+	if err := pool.QueryRow(context.Background(),
+		`SELECT status FROM service_requests WHERE id = $1 AND tenant_id = $2`,
+		requestID, tenantID).Scan(&status); err != nil {
+		t.Fatalf("get request status: %v", err)
+	}
+	return status
+}
+
+func TestTransitionCreatesExactlyOneEvent(t *testing.T) {
 	repo, pool := newTestRepo(t)
 	truncateTables(t, pool)
 	ctx := context.Background()
 	tenantID := createTenant(t, pool)
 
-	created := createRequest(t, repo, pool, tenantID)
+	sr := createRequest(t, repo, pool, tenantID)
+	actorID := createUser(t, pool, tenantID)
 
-	got, err := repo.UpdateStatus(ctx, tenantID, created.ID, servicerequest.StatusAssigned)
+	event := servicerequest.RequestEvent{
+		TenantID:   tenantID,
+		RequestID:  sr.ID,
+		ActorID:    actorID,
+		FromStatus: servicerequest.StatusPending,
+		ToStatus:   servicerequest.StatusAssigned,
+	}
+	got, err := repo.Transition(ctx, event)
 	if err != nil {
-		t.Fatalf("UpdateStatus() error = %v", err)
+		t.Fatalf("Transition() error = %v", err)
 	}
 	if got.Status != servicerequest.StatusAssigned {
-		t.Errorf("UpdateStatus() status = %q, want %q", got.Status, servicerequest.StatusAssigned)
+		t.Errorf("Transition() status = %q, want assigned", got.Status)
 	}
-	if got.ID != created.ID {
-		t.Errorf("UpdateStatus() id = %v, want %v", got.ID, created.ID)
+
+	if n := countEvents(t, pool, tenantID, sr.ID); n != 1 {
+		t.Fatalf("event count = %d, want exactly 1", n)
+	}
+
+	var (
+		id         uuid.UUID
+		evTenantID uuid.UUID
+		evReqID    uuid.UUID
+		evActorID  uuid.UUID
+		from, to   servicerequest.Status
+		createdAt  time.Time
+	)
+	err = pool.QueryRow(ctx, `SELECT id, tenant_id, request_id, actor_id, from_status, to_status, created_at
+		FROM request_events WHERE request_id = $1`, sr.ID).Scan(&id, &evTenantID, &evReqID, &evActorID, &from, &to, &createdAt)
+	if err != nil {
+		t.Fatalf("scan request event: %v", err)
+	}
+	if id == uuid.Nil {
+		t.Error("event id is nil")
+	}
+	if evTenantID != tenantID {
+		t.Errorf("event tenant = %v, want %v", evTenantID, tenantID)
+	}
+	if evReqID != sr.ID {
+		t.Errorf("event request id = %v, want %v", evReqID, sr.ID)
+	}
+	if evActorID != actorID {
+		t.Errorf("event actor = %v, want %v", evActorID, actorID)
+	}
+	if from != servicerequest.StatusPending {
+		t.Errorf("event from = %q, want pending", from)
+	}
+	if to != servicerequest.StatusAssigned {
+		t.Errorf("event to = %q, want assigned", to)
+	}
+	if createdAt.IsZero() {
+		t.Error("event created_at is zero")
 	}
 }
 
-func TestUpdateStatusInvalidValueRejected(t *testing.T) {
-	repo, pool := newTestRepo(t)
-	truncateTables(t, pool)
-	ctx := context.Background()
-	tenantID := createTenant(t, pool)
-
-	created := createRequest(t, repo, pool, tenantID)
-
-	_, err := repo.UpdateStatus(ctx, tenantID, created.ID, "bogus")
-	if err == nil {
-		t.Fatal("UpdateStatus() invalid status error = nil, want error")
-	}
-}
-
-func TestUpdateStatusWrongTenant(t *testing.T) {
+func TestTransitionWrongTenant(t *testing.T) {
 	repo, pool := newTestRepo(t)
 	truncateTables(t, pool)
 	ctx := context.Background()
 	tenantA := createTenant(t, pool)
 	tenantB := createTenant(t, pool)
 
-	created := createRequest(t, repo, pool, tenantA)
+	sr := createRequest(t, repo, pool, tenantA)
+	actorID := createUser(t, pool, tenantB)
 
-	_, err := repo.UpdateStatus(ctx, tenantB, created.ID, servicerequest.StatusAssigned)
+	_, err := repo.Transition(ctx, servicerequest.RequestEvent{
+		TenantID:   tenantB,
+		RequestID:  sr.ID,
+		ActorID:    actorID,
+		FromStatus: servicerequest.StatusPending,
+		ToStatus:   servicerequest.StatusAssigned,
+	})
 	if !errors.Is(err, servicerequest.ErrNotFound) {
-		t.Errorf("UpdateStatus() across tenants error = %v, want ErrNotFound", err)
+		t.Errorf("Transition() across tenants error = %v, want ErrNotFound", err)
+	}
+	if status := getRequestStatus(t, pool, tenantA, sr.ID); status != servicerequest.StatusPending {
+		t.Errorf("status = %q, want unchanged pending", status)
+	}
+	if n := countEvents(t, pool, tenantA, sr.ID); n != 0 {
+		t.Errorf("event count = %d, want 0", n)
 	}
 }
 
-func TestUpdateStatusNotFound(t *testing.T) {
+func TestTransitionNotFound(t *testing.T) {
 	repo, pool := newTestRepo(t)
 	truncateTables(t, pool)
 	tenantID := createTenant(t, pool)
 
-	_, err := repo.UpdateStatus(context.Background(), tenantID, uuid.MustParse("00000000-0000-0000-0000-000000000001"), servicerequest.StatusAssigned)
+	_, err := repo.Transition(context.Background(), servicerequest.RequestEvent{
+		TenantID:   tenantID,
+		RequestID:  uuid.MustParse("00000000-0000-0000-0000-000000000001"),
+		ActorID:    createUser(t, pool, tenantID),
+		FromStatus: servicerequest.StatusPending,
+		ToStatus:   servicerequest.StatusAssigned,
+	})
 	if !errors.Is(err, servicerequest.ErrNotFound) {
-		t.Errorf("UpdateStatus() error = %v, want ErrNotFound", err)
+		t.Errorf("Transition() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestTransitionStaleFromStatusRejected(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	sr := createRequest(t, repo, pool, tenantID)
+
+	_, err := repo.Transition(ctx, servicerequest.RequestEvent{
+		TenantID:   tenantID,
+		RequestID:  sr.ID,
+		ActorID:    createUser(t, pool, tenantID),
+		FromStatus: servicerequest.StatusAssigned,
+		ToStatus:   servicerequest.StatusInProgress,
+	})
+	if !errors.Is(err, servicerequest.ErrNotFound) {
+		t.Errorf("Transition() stale from error = %v, want ErrNotFound", err)
+	}
+	if status := getRequestStatus(t, pool, tenantID, sr.ID); status != servicerequest.StatusPending {
+		t.Errorf("status = %q, want unchanged pending", status)
+	}
+	if n := countEvents(t, pool, tenantID, sr.ID); n != 0 {
+		t.Errorf("event count = %d, want 0", n)
+	}
+}
+
+func TestTransitionCrossTenantActorRejected(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantA := createTenant(t, pool)
+	tenantB := createTenant(t, pool)
+
+	sr := createRequest(t, repo, pool, tenantA)
+	actorB := createUser(t, pool, tenantB)
+
+	_, err := repo.Transition(ctx, servicerequest.RequestEvent{
+		TenantID:   tenantA,
+		RequestID:  sr.ID,
+		ActorID:    actorB,
+		FromStatus: servicerequest.StatusPending,
+		ToStatus:   servicerequest.StatusAssigned,
+	})
+	if err == nil {
+		t.Fatal("Transition() cross-tenant actor error = nil, want error")
+	}
+	if status := getRequestStatus(t, pool, tenantA, sr.ID); status != servicerequest.StatusPending {
+		t.Errorf("status = %q, want unchanged pending (event insert must roll back)", status)
+	}
+	if n := countEvents(t, pool, tenantA, sr.ID); n != 0 {
+		t.Errorf("event count = %d, want 0", n)
+	}
+}
+
+func TestTransitionInvalidStatusRejected(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	sr := createRequest(t, repo, pool, tenantID)
+
+	_, err := repo.Transition(ctx, servicerequest.RequestEvent{
+		TenantID:   tenantID,
+		RequestID:  sr.ID,
+		ActorID:    createUser(t, pool, tenantID),
+		FromStatus: "bogus",
+		ToStatus:   "bogus",
+	})
+	if err == nil {
+		t.Fatal("Transition() invalid status error = nil, want error")
+	}
+	if status := getRequestStatus(t, pool, tenantID, sr.ID); status != servicerequest.StatusPending {
+		t.Errorf("status = %q, want unchanged pending (event insert must roll back)", status)
+	}
+	if n := countEvents(t, pool, tenantID, sr.ID); n != 0 {
+		t.Errorf("event count = %d, want 0", n)
 	}
 }
 

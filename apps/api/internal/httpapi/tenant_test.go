@@ -43,7 +43,7 @@ func (s *stubRequestService) CreateRequest(context.Context, servicerequest.Creat
 	return servicerequest.ServiceRequest{}, errors.New("stubRequestService: CreateRequest not configured")
 }
 
-func (s *stubRequestService) TransitionRequest(context.Context, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+func (s *stubRequestService) TransitionRequest(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
 	return servicerequest.ServiceRequest{}, errors.New("stubRequestService: TransitionRequest not configured")
 }
 

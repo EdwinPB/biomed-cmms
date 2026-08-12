@@ -66,15 +66,37 @@ func (r *Repository) GetByID(ctx context.Context, tenantID, id uuid.UUID) (servi
 	return sr, nil
 }
 
-func (r *Repository) UpdateStatus(ctx context.Context, tenantID, id uuid.UUID, status servicerequest.Status) (servicerequest.ServiceRequest, error) {
-	const query = `UPDATE service_requests SET status = $3 WHERE id = $1 AND tenant_id = $2 RETURNING ` + serviceRequestColumns
+// Transition atomically applies a status change and records its audit event.
+// The UPDATE is guarded by the request's current status (optimistic
+// concurrency): if the row is missing or already moved on, the whole
+// transaction rolls back and ErrNotFound is returned. A failure inserting the
+// event also rolls back the status update, so status and history never diverge.
+func (r *Repository) Transition(ctx context.Context, event servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return servicerequest.ServiceRequest{}, fmt.Errorf("begin transition transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 
-	sr, err := scanServiceRequest(r.pool.QueryRow(ctx, query, id, tenantID, status))
+	const updateQuery = `UPDATE service_requests SET status = $1 WHERE id = $2 AND tenant_id = $3 AND status = $4 RETURNING ` + serviceRequestColumns
+	sr, err := scanServiceRequest(tx.QueryRow(ctx, updateQuery,
+		event.ToStatus, event.RequestID, event.TenantID, event.FromStatus))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
 	}
 	if err != nil {
 		return servicerequest.ServiceRequest{}, fmt.Errorf("update service request status: %w", err)
+	}
+
+	const insertQuery = `INSERT INTO request_events (tenant_id, request_id, actor_id, from_status, to_status)
+		VALUES ($1, $2, $3, $4, $5)`
+	if _, err := tx.Exec(ctx, insertQuery,
+		event.TenantID, event.RequestID, event.ActorID, event.FromStatus, event.ToStatus); err != nil {
+		return servicerequest.ServiceRequest{}, fmt.Errorf("insert request event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return servicerequest.ServiceRequest{}, fmt.Errorf("commit transition: %w", err)
 	}
 	return sr, nil
 }

@@ -26,7 +26,7 @@ func uniqueSlug(t *testing.T) string {
 
 func truncateTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), `TRUNCATE service_requests, equipment, users, tenants`); err != nil {
+	if _, err := pool.Exec(context.Background(), `TRUNCATE request_events, service_requests, equipment, users, tenants`); err != nil {
 		t.Fatalf("truncate tables: %v", err)
 	}
 }

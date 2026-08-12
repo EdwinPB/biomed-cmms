@@ -41,18 +41,24 @@ func (s *Service) CreateRequest(ctx context.Context, params servicerequest.Creat
 }
 
 // TransitionRequest loads the request tenant-scoped, validates the status
-// change against the domain transition rules, and persists the new status.
-func (s *Service) TransitionRequest(ctx context.Context, tenantID, id uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error) {
+// change against the domain transition rules, and persists the new status and
+// its audit event atomically.
+//
+// The atomic status update + event insert happens inside a single database
+// transaction owned by the repository (Repository.Transition); this service
+// never touches transactions.
+func (s *Service) TransitionRequest(ctx context.Context, tenantID, id, actorID uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error) {
 	sr, err := s.repo.GetByID(ctx, tenantID, id)
 	if err != nil {
 		return servicerequest.ServiceRequest{}, err
 	}
 
-	if err := sr.TransitionTo(to); err != nil {
+	event, err := sr.TransitionTo(to, actorID)
+	if err != nil {
 		return servicerequest.ServiceRequest{}, err
 	}
 
-	return s.repo.UpdateStatus(ctx, tenantID, id, to)
+	return s.repo.Transition(ctx, event)
 }
 
 func validateCreate(params servicerequest.CreateParams) error {

@@ -17,10 +17,10 @@ import (
 )
 
 type fakeRequestService struct {
-	createFn                             func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
-	transitionFn                         func(ctx context.Context, tenantID, id uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error)
-	gotCreateTenant, gotCreateUser       uuid.UUID
-	gotTransitionTenant, gotTransitionID uuid.UUID
+	createFn                                       func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
+	transitionFn                                   func(ctx context.Context, tenantID, id, actorID uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error)
+	gotCreateTenant, gotCreateUser                 uuid.UUID
+	gotTransitionTenant, gotTransitionID, gotActor uuid.UUID
 }
 
 func (f *fakeRequestService) CreateRequest(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
@@ -32,11 +32,12 @@ func (f *fakeRequestService) CreateRequest(ctx context.Context, params servicere
 	return servicerequest.ServiceRequest{}, errors.New("fakeRequestService: Create not configured")
 }
 
-func (f *fakeRequestService) TransitionRequest(ctx context.Context, tenantID, id uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error) {
+func (f *fakeRequestService) TransitionRequest(ctx context.Context, tenantID, id, actorID uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error) {
 	f.gotTransitionTenant = tenantID
 	f.gotTransitionID = id
+	f.gotActor = actorID
 	if f.transitionFn != nil {
-		return f.transitionFn(ctx, tenantID, id, to)
+		return f.transitionFn(ctx, tenantID, id, actorID, to)
 	}
 	return servicerequest.ServiceRequest{}, errors.New("fakeRequestService: Transition not configured")
 }
@@ -226,7 +227,7 @@ func TestCreateRequestInternalError(t *testing.T) {
 }
 
 func TestTransitionStatusSuccess(t *testing.T) {
-	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
 		sr := createdRequest()
 		sr.Status = servicerequest.StatusAssigned
 		return sr, nil
@@ -251,10 +252,24 @@ func TestTransitionStatusSuccess(t *testing.T) {
 	if fake.gotTransitionID != uuid.MustParse("44444444-4444-4444-4444-444444444444") {
 		t.Errorf("TransitionRequest() id = %v", fake.gotTransitionID)
 	}
+	if fake.gotActor != uuid.MustParse(testUserID) {
+		t.Errorf("TransitionRequest() actor = %v, want %v", fake.gotActor, testUserID)
+	}
+}
+
+func TestTransitionStatusMissingUserHeader(t *testing.T) {
+	fake := &fakeRequestService{}
+
+	rec := doRequestSvc(t, fake, http.MethodPatch, "/api/v1/requests/44444444-4444-4444-4444-444444444444/status",
+		`{"status":"assigned"}`, "X-Tenant-ID", testTenantID)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
 }
 
 func TestTransitionStatusInvalidTransition(t *testing.T) {
-	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, servicerequest.ErrInvalidTransition
 	}}
 
@@ -270,7 +285,7 @@ func TestTransitionStatusInvalidTransition(t *testing.T) {
 }
 
 func TestTransitionStatusNotFound(t *testing.T) {
-	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
 	}}
 
@@ -316,7 +331,7 @@ func TestTransitionStatusMalformedBody(t *testing.T) {
 }
 
 func TestTransitionStatusInternalError(t *testing.T) {
-	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, errors.New("connection reset")
 	}}
 

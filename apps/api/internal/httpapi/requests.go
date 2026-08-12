@@ -77,6 +77,11 @@ func (h *handler) transitionStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	actorID, err := UserIDFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -90,7 +95,7 @@ func (h *handler) transitionStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.serviceRequests.TransitionRequest(r.Context(), tenantID, id, req.Status)
+	updated, err := h.serviceRequests.TransitionRequest(r.Context(), tenantID, id, actorID, req.Status)
 	if err != nil {
 		h.writeRequestError(w, err)
 		return
