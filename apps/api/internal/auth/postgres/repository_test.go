@@ -395,3 +395,105 @@ func TestCreateUserSameEmailDifferentTenantAllowed(t *testing.T) {
 		t.Errorf("ListUsers() = %d, want 1", len(got))
 	}
 }
+
+func TestUpdateUserRoleAndActivePersist(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateAuthTables(t, pool)
+	ctx := context.Background()
+	tenantID := insertTenant(t, pool, uniqueSlug(t))
+	userID := insertUser(t, pool, tenantID, "dev@local.test")
+
+	role := auth.RoleBiomedic
+	active := false
+	got, err := repo.UpdateUser(ctx, auth.UpdateParams{ID: userID, TenantID: tenantID, Role: &role, IsActive: &active})
+	if err != nil {
+		t.Fatalf("UpdateUser() error = %v", err)
+	}
+	if got.Role != auth.RoleBiomedic || got.IsActive {
+		t.Errorf("UpdateUser() = %+v", got)
+	}
+
+	persisted, err := repo.GetUserByTenantEmail(ctx, tenantID, "dev@local.test")
+	if err != nil {
+		t.Fatalf("GetUserByTenantEmail() error = %v", err)
+	}
+	if persisted.Role != auth.RoleBiomedic || persisted.IsActive {
+		t.Errorf("persisted user = %+v", persisted)
+	}
+}
+
+func TestUpdateUserRoleOnlyPersistsRole(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateAuthTables(t, pool)
+	ctx := context.Background()
+	tenantID := insertTenant(t, pool, uniqueSlug(t))
+	userID := insertUser(t, pool, tenantID, "dev@local.test")
+
+	role := auth.RoleRequester
+	if _, err := repo.UpdateUser(ctx, auth.UpdateParams{ID: userID, TenantID: tenantID, Role: &role}); err != nil {
+		t.Fatalf("UpdateUser() error = %v", err)
+	}
+
+	persisted, err := repo.GetUserByTenantEmail(ctx, tenantID, "dev@local.test")
+	if err != nil {
+		t.Fatalf("GetUserByTenantEmail() error = %v", err)
+	}
+	if persisted.Role != auth.RoleRequester {
+		t.Errorf("persisted role = %q, want requester", persisted.Role)
+	}
+	if !persisted.IsActive {
+		t.Error("is_active changed when only role was updated")
+	}
+}
+
+func TestUpdateUserIsActiveOnlyPersistsActive(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateAuthTables(t, pool)
+	ctx := context.Background()
+	tenantID := insertTenant(t, pool, uniqueSlug(t))
+	userID := insertUser(t, pool, tenantID, "dev@local.test")
+
+	active := false
+	if _, err := repo.UpdateUser(ctx, auth.UpdateParams{ID: userID, TenantID: tenantID, IsActive: &active}); err != nil {
+		t.Fatalf("UpdateUser() error = %v", err)
+	}
+
+	persisted, err := repo.GetUserByTenantEmail(ctx, tenantID, "dev@local.test")
+	if err != nil {
+		t.Fatalf("GetUserByTenantEmail() error = %v", err)
+	}
+	if persisted.IsActive {
+		t.Error("is_active = true, want false")
+	}
+	if persisted.Role != auth.RoleAdmin {
+		t.Errorf("role changed when only is_active was updated: %q", persisted.Role)
+	}
+}
+
+func TestUpdateUserForeignTenantIDNotFound(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateAuthTables(t, pool)
+	ctx := context.Background()
+	tenantID := insertTenant(t, pool, uniqueSlug(t))
+	otherTenantID := insertTenant(t, pool, uniqueSlug(t))
+	userID := insertUser(t, pool, tenantID, "dev@local.test")
+
+	active := true
+	_, err := repo.UpdateUser(ctx, auth.UpdateParams{ID: userID, TenantID: otherTenantID, IsActive: &active})
+	if !errors.Is(err, auth.ErrUserNotFound) {
+		t.Fatalf("UpdateUser() foreign tenant error = %v, want auth.ErrUserNotFound", err)
+	}
+}
+
+func TestUpdateUserNonexistentIDNotFound(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateAuthTables(t, pool)
+	ctx := context.Background()
+	tenantID := insertTenant(t, pool, uniqueSlug(t))
+
+	active := true
+	_, err := repo.UpdateUser(ctx, auth.UpdateParams{ID: uuid.New(), TenantID: tenantID, IsActive: &active})
+	if !errors.Is(err, auth.ErrUserNotFound) {
+		t.Fatalf("UpdateUser() nonexistent error = %v, want auth.ErrUserNotFound", err)
+	}
+}

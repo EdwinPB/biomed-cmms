@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -91,6 +92,37 @@ func (r *Repository) CreateUser(ctx context.Context, params auth.CreateParams) (
 			return auth.User{}, auth.ErrConflict
 		}
 		return auth.User{}, fmt.Errorf("create user: %w", err)
+	}
+	return u, nil
+}
+
+func (r *Repository) UpdateUser(ctx context.Context, params auth.UpdateParams) (auth.User, error) {
+	var sets []string
+	var args []any
+	if params.Role != nil {
+		sets = append(sets, fmt.Sprintf("role = $%d", len(args)+1))
+		args = append(args, *params.Role)
+	}
+	if params.IsActive != nil {
+		sets = append(sets, fmt.Sprintf("is_active = $%d", len(args)+1))
+		args = append(args, *params.IsActive)
+	}
+	if len(sets) == 0 {
+		return auth.User{}, auth.ErrEmptyUpdate
+	}
+
+	args = append(args, params.TenantID, params.ID)
+	query := fmt.Sprintf(`UPDATE users SET %s
+		WHERE tenant_id = $%d AND id = $%d
+		RETURNING id, tenant_id, email, password_hash, full_name, role, is_active, last_login_at, created_at, updated_at`,
+		strings.Join(sets, ", "), len(args)-1, len(args))
+
+	u, err := scanUser(r.pool.QueryRow(ctx, query, args...))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return auth.User{}, auth.ErrUserNotFound
+	}
+	if err != nil {
+		return auth.User{}, fmt.Errorf("update user: %w", err)
 	}
 	return u, nil
 }

@@ -34,6 +34,8 @@ var (
 	ErrEmailRequired      = errors.New("auth: email is required")
 	ErrPasswordRequired   = errors.New("auth: password is required")
 	ErrInvalidRole        = errors.New("auth: invalid role")
+	ErrEmptyUpdate        = errors.New("auth: no fields to update")
+	ErrSelfLockout        = errors.New("auth: cannot deactivate or demote your own account")
 )
 
 // User is the subset of the users record needed by the auth flows.
@@ -108,6 +110,15 @@ type CreateParams struct {
 	IsActive     bool
 }
 
+// UpdateParams are the inputs to Repository.UpdateUser. Nil fields are left
+// unchanged. ID and TenantID always scope the update.
+type UpdateParams struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	Role     *Role
+	IsActive *bool
+}
+
 // Repository is the persistence boundary for auth. Implementations live in
 // infrastructure packages; the service depends only on this interface.
 type Repository interface {
@@ -115,6 +126,7 @@ type Repository interface {
 	GetUserByTenantEmail(ctx context.Context, tenantID uuid.UUID, email string) (User, error)
 	ListUsers(ctx context.Context, tenantID uuid.UUID) ([]User, error)
 	CreateUser(ctx context.Context, params CreateParams) (User, error)
+	UpdateUser(ctx context.Context, params UpdateParams) (User, error)
 	CreateSession(ctx context.Context, params CreateSessionParams) error
 	GetSessionByTokenHash(ctx context.Context, tokenHash string) (SessionRecord, error)
 	DeleteSession(ctx context.Context, tokenHash string) error

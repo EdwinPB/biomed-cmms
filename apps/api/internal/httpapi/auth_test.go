@@ -26,6 +26,7 @@ type stubAuthService struct {
 	authenticateFn func(ctx context.Context, tokenHash string) (auth.Principal, error)
 	listUsersFn    func(ctx context.Context, tenantID uuid.UUID, role auth.Role) ([]auth.User, error)
 	createUserFn   func(ctx context.Context, params auth.CreateParams, role auth.Role) (auth.User, error)
+	updateUserFn   func(ctx context.Context, params auth.UpdateParams, actorUserID uuid.UUID, role auth.Role) (auth.User, error)
 }
 
 func (s *stubAuthService) Login(ctx context.Context, creds auth.Credentials) (auth.Session, error) {
@@ -61,6 +62,13 @@ func (s *stubAuthService) CreateUser(ctx context.Context, params auth.CreatePara
 		return s.createUserFn(ctx, params, role)
 	}
 	return auth.User{}, errors.New("stubAuthService: CreateUser not configured")
+}
+
+func (s *stubAuthService) UpdateUser(ctx context.Context, params auth.UpdateParams, actorUserID uuid.UUID, role auth.Role) (auth.User, error) {
+	if s.updateUserFn != nil {
+		return s.updateUserFn(ctx, params, actorUserID, role)
+	}
+	return auth.User{}, errors.New("stubAuthService: UpdateUser not configured")
 }
 
 // testSessionPrincipal is the identity the stub authenticates by default. It

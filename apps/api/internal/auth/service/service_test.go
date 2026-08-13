@@ -18,6 +18,7 @@ type fakeRepo struct {
 	userByEmail   func(ctx context.Context, tenantID uuid.UUID, email string) (auth.User, error)
 	listUsers     func(ctx context.Context, tenantID uuid.UUID) ([]auth.User, error)
 	createUser    func(ctx context.Context, params auth.CreateParams) (auth.User, error)
+	updateUser    func(ctx context.Context, params auth.UpdateParams) (auth.User, error)
 	createSession func(ctx context.Context, params auth.CreateSessionParams) error
 	sessionByHash func(ctx context.Context, tokenHash string) (auth.SessionRecord, error)
 	deleteSession func(ctx context.Context, tokenHash string) error
@@ -25,6 +26,7 @@ type fakeRepo struct {
 
 	gotCreateParams auth.CreateSessionParams
 	gotUserParams   auth.CreateParams
+	gotUpdateParams auth.UpdateParams
 	gotTokenHash    string
 	gotTouchNow     time.Time
 	gotListTenantID uuid.UUID
@@ -58,6 +60,14 @@ func (f *fakeRepo) CreateUser(ctx context.Context, params auth.CreateParams) (au
 		return f.createUser(ctx, params)
 	}
 	return auth.User{}, errors.New("fakeRepo: CreateUser not configured")
+}
+
+func (f *fakeRepo) UpdateUser(ctx context.Context, params auth.UpdateParams) (auth.User, error) {
+	f.gotUpdateParams = params
+	if f.updateUser != nil {
+		return f.updateUser(ctx, params)
+	}
+	return auth.User{}, errors.New("fakeRepo: UpdateUser not configured")
 }
 
 func (f *fakeRepo) CreateSession(ctx context.Context, params auth.CreateSessionParams) error {
@@ -634,5 +644,215 @@ func TestCreateUserDuplicateEmailPropagatesConflict(t *testing.T) {
 	_, err := svc.CreateUser(context.Background(), auth.CreateParams{TenantID: testTenantID, Email: "dup@local.test", Role: auth.RoleRequester, PasswordHash: "pw"}, auth.RoleAdmin)
 	if !errors.Is(err, auth.ErrConflict) {
 		t.Fatalf("CreateUser() error = %v, want auth.ErrConflict", err)
+	}
+}
+
+func TestUpdateUserRoleChange(t *testing.T) {
+	role := auth.RoleBiomedic
+	repo := &fakeRepo{updateUser: func(_ context.Context, params auth.UpdateParams) (auth.User, error) {
+		return auth.User{ID: testUserID, TenantID: params.TenantID, Role: *params.Role, IsActive: true}, nil
+	}}
+	svc := newTestService(repo, 12*time.Hour)
+
+	got, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: testUserID, TenantID: testTenantID, Role: &role}, uuid.New(), auth.RoleAdmin)
+	if err != nil {
+		t.Fatalf("UpdateUser() error = %v", err)
+	}
+	if got.Role != auth.RoleBiomedic {
+		t.Errorf("UpdateUser() role = %q, want biomedic", got.Role)
+	}
+	if repo.gotUpdateParams.ID != testUserID || repo.gotUpdateParams.TenantID != testTenantID {
+		t.Errorf("UpdateUser() scope = %+v", repo.gotUpdateParams)
+	}
+	if repo.gotUpdateParams.Role == nil || *repo.gotUpdateParams.Role != auth.RoleBiomedic {
+		t.Errorf("UpdateUser() params role = %+v", repo.gotUpdateParams.Role)
+	}
+	if repo.gotUpdateParams.IsActive != nil {
+		t.Errorf("UpdateUser() params is_active set unexpectedly: %+v", *repo.gotUpdateParams.IsActive)
+	}
+}
+
+func TestUpdateUserActivateAndDeactivate(t *testing.T) {
+	for _, active := range []bool{true, false} {
+		t.Run(map[bool]string{true: "activate", false: "deactivate"}[active], func(t *testing.T) {
+			repo := &fakeRepo{updateUser: func(_ context.Context, params auth.UpdateParams) (auth.User, error) {
+				return auth.User{ID: testUserID, TenantID: params.TenantID, Role: auth.RoleRequester, IsActive: *params.IsActive}, nil
+			}}
+			svc := newTestService(repo, 12*time.Hour)
+
+			got, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: testUserID, TenantID: testTenantID, IsActive: &active}, uuid.New(), auth.RoleAdmin)
+			if err != nil {
+				t.Fatalf("UpdateUser() error = %v", err)
+			}
+			if got.IsActive != active {
+				t.Errorf("UpdateUser() is_active = %v, want %v", got.IsActive, active)
+			}
+			if repo.gotUpdateParams.IsActive == nil || *repo.gotUpdateParams.IsActive != active {
+				t.Errorf("UpdateUser() params is_active = %+v", repo.gotUpdateParams.IsActive)
+			}
+		})
+	}
+}
+
+func TestUpdateUserBothFieldsTogether(t *testing.T) {
+	role := auth.RoleRequester
+	active := false
+	repo := &fakeRepo{updateUser: func(_ context.Context, params auth.UpdateParams) (auth.User, error) {
+		return auth.User{ID: testUserID, TenantID: params.TenantID, Role: *params.Role, IsActive: *params.IsActive}, nil
+	}}
+	svc := newTestService(repo, 12*time.Hour)
+
+	got, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: testUserID, TenantID: testTenantID, Role: &role, IsActive: &active}, uuid.New(), auth.RoleAdmin)
+	if err != nil {
+		t.Fatalf("UpdateUser() error = %v", err)
+	}
+	if got.Role != auth.RoleRequester || got.IsActive {
+		t.Errorf("UpdateUser() = %+v", got)
+	}
+	if repo.gotUpdateParams.Role == nil || repo.gotUpdateParams.IsActive == nil {
+		t.Error("UpdateUser() did not forward both fields")
+	}
+}
+
+func TestUpdateUserEmptyUpdate(t *testing.T) {
+	repo := &fakeRepo{
+		updateUser: func(context.Context, auth.UpdateParams) (auth.User, error) {
+			t.Fatal("UpdateUser() must not be called for empty update")
+			return auth.User{}, nil
+		},
+	}
+	svc := newTestService(repo, 12*time.Hour)
+
+	_, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: testUserID, TenantID: testTenantID}, uuid.New(), auth.RoleAdmin)
+	if !errors.Is(err, auth.ErrEmptyUpdate) {
+		t.Fatalf("UpdateUser() error = %v, want ErrEmptyUpdate", err)
+	}
+}
+
+func TestUpdateUserInvalidRole(t *testing.T) {
+	role := auth.Role("superuser")
+	repo := &fakeRepo{
+		updateUser: func(context.Context, auth.UpdateParams) (auth.User, error) {
+			t.Fatal("UpdateUser() must not be called for invalid role")
+			return auth.User{}, nil
+		},
+	}
+	svc := newTestService(repo, 12*time.Hour)
+
+	_, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: testUserID, TenantID: testTenantID, Role: &role}, uuid.New(), auth.RoleAdmin)
+	if !errors.Is(err, auth.ErrInvalidRole) {
+		t.Fatalf("UpdateUser() error = %v, want ErrInvalidRole", err)
+	}
+}
+
+func TestUpdateUserNonAdminForbiddenWithoutRepoAccess(t *testing.T) {
+	for _, role := range []auth.Role{auth.RoleBiomedic, auth.RoleRequester} {
+		t.Run(string(role), func(t *testing.T) {
+			active := true
+			repo := &fakeRepo{
+				updateUser: func(context.Context, auth.UpdateParams) (auth.User, error) {
+					t.Fatal("UpdateUser() must not be called for non-admin")
+					return auth.User{}, nil
+				},
+			}
+			svc := newTestService(repo, 12*time.Hour)
+
+			_, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: testUserID, TenantID: testTenantID, IsActive: &active}, uuid.New(), role)
+			if !errors.Is(err, auth.ErrForbidden) {
+				t.Fatalf("UpdateUser() error = %v, want ErrForbidden", err)
+			}
+			if repo.gotUpdateParams != (auth.UpdateParams{}) {
+				t.Errorf("UpdateUser() called with params %+v, want no call", repo.gotUpdateParams)
+			}
+		})
+	}
+}
+
+func TestUpdateUserNotFoundPropagated(t *testing.T) {
+	repo := &fakeRepo{updateUser: func(context.Context, auth.UpdateParams) (auth.User, error) {
+		return auth.User{}, auth.ErrUserNotFound
+	}}
+	svc := newTestService(repo, 12*time.Hour)
+	role := auth.RoleAdmin
+
+	_, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: uuid.New(), TenantID: testTenantID, Role: &role}, uuid.New(), auth.RoleAdmin)
+	if !errors.Is(err, auth.ErrUserNotFound) {
+		t.Fatalf("UpdateUser() error = %v, want auth.ErrUserNotFound", err)
+	}
+}
+
+func TestUpdateUserAdminCannotDeactivateSelf(t *testing.T) {
+	active := false
+	repo := &fakeRepo{
+		updateUser: func(context.Context, auth.UpdateParams) (auth.User, error) {
+			t.Fatal("UpdateUser() must not be called for self-lockout")
+			return auth.User{}, nil
+		},
+	}
+	svc := newTestService(repo, 12*time.Hour)
+
+	_, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: testUserID, TenantID: testTenantID, IsActive: &active}, testUserID, auth.RoleAdmin)
+	if !errors.Is(err, auth.ErrSelfLockout) {
+		t.Fatalf("UpdateUser() error = %v, want ErrSelfLockout", err)
+	}
+}
+
+func TestUpdateUserAdminCannotDemoteSelf(t *testing.T) {
+	role := auth.RoleRequester
+	repo := &fakeRepo{
+		updateUser: func(context.Context, auth.UpdateParams) (auth.User, error) {
+			t.Fatal("UpdateUser() must not be called for self-lockout")
+			return auth.User{}, nil
+		},
+	}
+	svc := newTestService(repo, 12*time.Hour)
+
+	_, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: testUserID, TenantID: testTenantID, Role: &role}, testUserID, auth.RoleAdmin)
+	if !errors.Is(err, auth.ErrSelfLockout) {
+		t.Fatalf("UpdateUser() error = %v, want ErrSelfLockout", err)
+	}
+}
+
+func TestUpdateUserAdminCanUpdateAnotherAdmin(t *testing.T) {
+	role := auth.RoleAdmin
+	active := false
+	otherAdminID := uuid.MustParse("44444444-4444-4444-4444-444444444444")
+	repo := &fakeRepo{updateUser: func(_ context.Context, params auth.UpdateParams) (auth.User, error) {
+		return auth.User{ID: params.ID, TenantID: params.TenantID, Role: *params.Role, IsActive: *params.IsActive}, nil
+	}}
+	svc := newTestService(repo, 12*time.Hour)
+
+	got, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: otherAdminID, TenantID: testTenantID, Role: &role, IsActive: &active}, testUserID, auth.RoleAdmin)
+	if err != nil {
+		t.Fatalf("UpdateUser() error = %v", err)
+	}
+	if got.Role != auth.RoleAdmin || got.IsActive {
+		t.Errorf("UpdateUser() = %+v", got)
+	}
+}
+
+func TestUpdateUserAdminCanSetOwnRoleToAdmin(t *testing.T) {
+	role := auth.RoleAdmin
+	repo := &fakeRepo{updateUser: func(_ context.Context, params auth.UpdateParams) (auth.User, error) {
+		return auth.User{ID: params.ID, TenantID: params.TenantID, Role: *params.Role, IsActive: true}, nil
+	}}
+	svc := newTestService(repo, 12*time.Hour)
+
+	if _, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: testUserID, TenantID: testTenantID, Role: &role}, testUserID, auth.RoleAdmin); err != nil {
+		t.Fatalf("UpdateUser() error = %v, want nil for self role=admin", err)
+	}
+}
+
+func TestUpdateUserRepoErrorPropagated(t *testing.T) {
+	wantErr := errors.New("connection reset")
+	repo := &fakeRepo{updateUser: func(context.Context, auth.UpdateParams) (auth.User, error) {
+		return auth.User{}, wantErr
+	}}
+	svc := newTestService(repo, 12*time.Hour)
+	active := true
+
+	_, err := svc.UpdateUser(context.Background(), auth.UpdateParams{ID: testUserID, TenantID: testTenantID, IsActive: &active}, uuid.New(), auth.RoleAdmin)
+	if !errors.Is(err, wantErr) {
+		t.Errorf("UpdateUser() error = %v, want %v", err, wantErr)
 	}
 }

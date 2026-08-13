@@ -38,6 +38,18 @@ func doUsersCreateRequest(t *testing.T, auth AuthService, body string, withSessi
 	return rec
 }
 
+func doUsersUpdateRequest(t *testing.T, auth AuthService, id, body string, withSession bool) *httptest.ResponseRecorder {
+	t.Helper()
+	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/"+id, strings.NewReader(body))
+	if withSession {
+		addSessionCookie(req)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
 func testUsers() []auth.User {
 	return []auth.User{
 		{
@@ -318,6 +330,192 @@ func TestCreateUserInternalErrorNoLeak(t *testing.T) {
 	}}
 
 	rec := doUsersCreateRequest(t, authSvc, `{"email":"new@local.test","full_name":"New User","role":"requester","password":"secret-pass"}`, true)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if strings.Contains(rec.Body.String(), "connection reset") {
+		t.Errorf("body leaks internal error: %q", rec.Body.String())
+	}
+}
+
+func TestUpdateUserAdminSuccess(t *testing.T) {
+	var gotParams auth.UpdateParams
+	var gotActor uuid.UUID
+	var gotRole auth.Role
+	authSvc := &stubAuthService{updateUserFn: func(_ context.Context, params auth.UpdateParams, actorUserID uuid.UUID, role auth.Role) (auth.User, error) {
+		gotParams = params
+		gotActor = actorUserID
+		gotRole = role
+		return auth.User{
+			ID:        params.ID,
+			TenantID:  params.TenantID,
+			Email:     "target@local.test",
+			FullName:  "Target User",
+			Role:      *params.Role,
+			IsActive:  true,
+			CreatedAt: mustTime("2026-08-12T12:00:00Z"),
+		}, nil
+	}}
+
+	targetID := uuid.MustParse("88888888-8888-8888-8888-888888888888")
+	rec := doUsersUpdateRequest(t, authSvc, targetID.String(), `{"role":"biomedic"}`, true)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body userResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.ID != targetID || body.Role != auth.RoleBiomedic || !body.IsActive {
+		t.Errorf("body = %+v", body)
+	}
+	if gotParams.ID != targetID {
+		t.Errorf("UpdateUser() id = %v, want %v", gotParams.ID, targetID)
+	}
+	if gotParams.TenantID != uuid.MustParse(testTenantID) {
+		t.Errorf("UpdateUser() tenant = %v, want session tenant %v", gotParams.TenantID, testTenantID)
+	}
+	if gotParams.Role == nil || *gotParams.Role != auth.RoleBiomedic {
+		t.Errorf("UpdateUser() role = %+v", gotParams.Role)
+	}
+	if gotActor != uuid.MustParse(testUserID) {
+		t.Errorf("UpdateUser() actor = %v, want session user %v", gotActor, testUserID)
+	}
+	if gotRole != auth.RoleAdmin {
+		t.Errorf("UpdateUser() role = %q, want admin", gotRole)
+	}
+}
+
+func TestUpdateUserResponseNoSecrets(t *testing.T) {
+	authSvc := &stubAuthService{updateUserFn: func(_ context.Context, params auth.UpdateParams, _ uuid.UUID, _ auth.Role) (auth.User, error) {
+		return auth.User{
+			ID:           params.ID,
+			TenantID:     params.TenantID,
+			Email:        "target@local.test",
+			Role:         *params.Role,
+			PasswordHash: "$2a$10$AAZLkEqOuWupLfw.D5sFyuhAmW/CXDmJ5SehlpyNfaEZh1Xeoe3iO",
+			IsActive:     true,
+		}, nil
+	}}
+
+	rec := doUsersUpdateRequest(t, authSvc, "88888888-8888-8888-8888-888888888888", `{"role":"requester"}`, true)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	for _, leak := range []string{"password_hash", "$2a$10$", "session", "token"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("response leaks %q: %q", leak, body)
+		}
+	}
+}
+
+func TestUpdateUserNonAdminForbidden(t *testing.T) {
+	for _, role := range []auth.Role{auth.RoleBiomedic, auth.RoleRequester} {
+		t.Run(string(role), func(t *testing.T) {
+			authSvc := &stubAuthService{updateUserFn: func(context.Context, auth.UpdateParams, uuid.UUID, auth.Role) (auth.User, error) {
+				return auth.User{}, auth.ErrForbidden
+			}}
+
+			rec := doUsersUpdateRequest(t, authSvc, "88888888-8888-8888-8888-888888888888", `{"is_active":false}`, true)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+			}
+			if got := rec.Body.String(); got != `{"error":"forbidden"}`+"\n" {
+				t.Errorf("body = %q, want %q", got, `{"error":"forbidden"}`+"\n")
+			}
+		})
+	}
+}
+
+func TestUpdateUserWithoutSession(t *testing.T) {
+	authSvc := &stubAuthService{}
+
+	rec := doUsersUpdateRequest(t, authSvc, "88888888-8888-8888-8888-888888888888", `{"is_active":false}`, false)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestUpdateUserInvalidJSON(t *testing.T) {
+	authSvc := &stubAuthService{}
+
+	rec := doUsersUpdateRequest(t, authSvc, "88888888-8888-8888-8888-888888888888", `{not json`, true)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestUpdateUserEmptyBody(t *testing.T) {
+	authSvc := &stubAuthService{updateUserFn: func(context.Context, auth.UpdateParams, uuid.UUID, auth.Role) (auth.User, error) {
+		return auth.User{}, auth.ErrEmptyUpdate
+	}}
+
+	rec := doUsersUpdateRequest(t, authSvc, "88888888-8888-8888-8888-888888888888", `{}`, true)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestUpdateUserInvalidRole(t *testing.T) {
+	authSvc := &stubAuthService{updateUserFn: func(context.Context, auth.UpdateParams, uuid.UUID, auth.Role) (auth.User, error) {
+		return auth.User{}, auth.ErrInvalidRole
+	}}
+
+	rec := doUsersUpdateRequest(t, authSvc, "88888888-8888-8888-8888-888888888888", `{"role":"superuser"}`, true)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestUpdateUserNotFound(t *testing.T) {
+	authSvc := &stubAuthService{updateUserFn: func(context.Context, auth.UpdateParams, uuid.UUID, auth.Role) (auth.User, error) {
+		return auth.User{}, auth.ErrUserNotFound
+	}}
+
+	rec := doUsersUpdateRequest(t, authSvc, "88888888-8888-8888-8888-888888888888", `{"is_active":false}`, true)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+func TestUpdateUserSelfLockout(t *testing.T) {
+	authSvc := &stubAuthService{updateUserFn: func(context.Context, auth.UpdateParams, uuid.UUID, auth.Role) (auth.User, error) {
+		return auth.User{}, auth.ErrSelfLockout
+	}}
+
+	rec := doUsersUpdateRequest(t, authSvc, "88888888-8888-8888-8888-888888888888", `{"is_active":false}`, true)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestUpdateUserInvalidID(t *testing.T) {
+	authSvc := &stubAuthService{}
+
+	rec := doUsersUpdateRequest(t, authSvc, "not-a-uuid", `{"is_active":false}`, true)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestUpdateUserInternalErrorNoLeak(t *testing.T) {
+	authSvc := &stubAuthService{updateUserFn: func(context.Context, auth.UpdateParams, uuid.UUID, auth.Role) (auth.User, error) {
+		return auth.User{}, errors.New("connection reset")
+	}}
+
+	rec := doUsersUpdateRequest(t, authSvc, "88888888-8888-8888-8888-888888888888", `{"is_active":false}`, true)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)

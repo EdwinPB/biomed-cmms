@@ -35,6 +35,13 @@ type createUserRequest struct {
 	Password string    `json:"password"`
 }
 
+// updateUserRequest carries the optional fields an admin may change. At least
+// one field must be provided.
+type updateUserRequest struct {
+	IsActive *bool      `json:"is_active"`
+	Role     *auth.Role `json:"role"`
+}
+
 // listUsers returns the authenticated tenant's users. Admin-only: the service
 // rejects biomedic and requester roles before any repository access.
 func (h *handler) listUsers(w http.ResponseWriter, r *http.Request) {
@@ -101,12 +108,60 @@ func (h *handler) createUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toUserResponse(created))
 }
 
+// updateUser activates/deactivates a user or changes their role. Admin-only;
+// the target must belong to the authenticated tenant. The service guards
+// against self-lockout.
+func (h *handler) updateUser(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := TenantIDFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	userID, err := UserIDFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	role, err := RoleFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+
+	var req updateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	updated, err := h.auth.UpdateUser(r.Context(), auth.UpdateParams{
+		ID:       id,
+		TenantID: tenantID,
+		Role:     req.Role,
+		IsActive: req.IsActive,
+	}, userID, role)
+	if err != nil {
+		h.writeUserError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toUserResponse(updated))
+}
+
 func (h *handler) writeUserError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, auth.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden")
 	case errors.Is(err, auth.ErrConflict):
 		writeError(w, http.StatusConflict, "user already exists")
+	case errors.Is(err, auth.ErrUserNotFound):
+		writeError(w, http.StatusNotFound, "user not found")
 	case isAuthValidationError(err):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
@@ -117,7 +172,9 @@ func (h *handler) writeUserError(w http.ResponseWriter, err error) {
 func isAuthValidationError(err error) bool {
 	return errors.Is(err, auth.ErrEmailRequired) ||
 		errors.Is(err, auth.ErrPasswordRequired) ||
-		errors.Is(err, auth.ErrInvalidRole)
+		errors.Is(err, auth.ErrInvalidRole) ||
+		errors.Is(err, auth.ErrEmptyUpdate) ||
+		errors.Is(err, auth.ErrSelfLockout)
 }
 
 func toUserResponse(u auth.User) userResponse {

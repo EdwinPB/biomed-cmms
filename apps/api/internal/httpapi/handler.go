@@ -32,6 +32,7 @@ type AuthService interface {
 	Authenticate(ctx context.Context, tokenHash string) (auth.Principal, error)
 	ListUsers(ctx context.Context, tenantID uuid.UUID, role auth.Role) ([]auth.User, error)
 	CreateUser(ctx context.Context, params auth.CreateParams, role auth.Role) (auth.User, error)
+	UpdateUser(ctx context.Context, params auth.UpdateParams, actorUserID uuid.UUID, role auth.Role) (auth.User, error)
 }
 
 // ServiceRequestService is the application use-case boundary for service
@@ -91,6 +92,7 @@ func NewHandler(tenants TenantService, authService AuthService, serviceRequests 
 	mux.Handle("GET /api/v1/auth/me", h.session(http.HandlerFunc(h.me)))
 	mux.Handle("GET /api/v1/users", h.session(http.HandlerFunc(h.listUsers)))
 	mux.Handle("POST /api/v1/users", h.session(http.HandlerFunc(h.createUser)))
+	mux.Handle("PATCH /api/v1/users/{id}", h.session(http.HandlerFunc(h.updateUser)))
 	mux.Handle("POST /api/v1/requests", h.session(http.HandlerFunc(h.createRequest)))
 	mux.Handle("GET /api/v1/requests", h.session(http.HandlerFunc(h.listRequests)))
 	mux.Handle("GET /api/v1/requests/{id}", h.session(http.HandlerFunc(h.getRequest)))

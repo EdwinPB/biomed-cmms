@@ -159,6 +159,43 @@ func validateCreateUser(params auth.CreateParams) error {
 	return errors.Join(errs...)
 }
 
+// UpdateUser updates a user's role and/or is_active within the authenticated
+// tenant. Only admins may update users. The update is always scoped by
+// tenant_id + user id, and admins are prevented from deactivating themselves
+// or changing their own role away from admin.
+func (s *Service) UpdateUser(ctx context.Context, params auth.UpdateParams, actorUserID uuid.UUID, role auth.Role) (auth.User, error) {
+	if role != auth.RoleAdmin {
+		return auth.User{}, auth.ErrForbidden
+	}
+	if err := validateUpdateUser(params); err != nil {
+		return auth.User{}, err
+	}
+	if params.ID == actorUserID {
+		if params.IsActive != nil && !*params.IsActive {
+			return auth.User{}, auth.ErrSelfLockout
+		}
+		if params.Role != nil && *params.Role != auth.RoleAdmin {
+			return auth.User{}, auth.ErrSelfLockout
+		}
+	}
+	return s.repo.UpdateUser(ctx, params)
+}
+
+func validateUpdateUser(params auth.UpdateParams) error {
+	var errs []error
+	if params.Role == nil && params.IsActive == nil {
+		errs = append(errs, auth.ErrEmptyUpdate)
+	}
+	if params.Role != nil {
+		switch *params.Role {
+		case auth.RoleAdmin, auth.RoleBiomedic, auth.RoleRequester:
+		default:
+			errs = append(errs, auth.ErrInvalidRole)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // Logout revokes a session. Logging out an already-revoked session is a no-op.
 func (s *Service) Logout(ctx context.Context, tokenHash string) error {
 	err := s.repo.DeleteSession(ctx, tokenHash)
