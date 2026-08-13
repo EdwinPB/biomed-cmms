@@ -3,12 +3,12 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ApiError, createServiceRequest } from "../../../lib/api";
-import type { RequestPriority } from "../../../lib/types/api";
-import { Button } from "../../../components/Button";
-import { Card } from "../../../components/Card";
-import { EquipmentSelect } from "../../../components/EquipmentSelect";
-import { PageHeader } from "../../../components/PageHeader";
+import { ApiError, createServiceRequest } from "../../../../lib/api";
+import type { RequestPriority } from "../../../../lib/types/api";
+import { Button } from "../../../../components/Button";
+import { Card } from "../../../../components/Card";
+import { EquipmentSelect } from "../../../../components/EquipmentSelect";
+import { PageHeader } from "../../../../components/PageHeader";
 
 type FormState = {
   equipment_id: string;

@@ -1,5 +1,5 @@
-import { Card } from "../components/Card";
-import { PageHeader } from "../components/PageHeader";
+import { Card } from "../../components/Card";
+import { PageHeader } from "../../components/PageHeader";
 
 const kpis = [
   {
@@ -31,16 +31,10 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <Card title="Getting started">
+      <Card title="Sesión">
         <p>
-          Data is served by the Go API at{" "}
-          <code>
-            {process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080"}
-          </code>
-          . Set <code>NEXT_PUBLIC_TENANT_ID</code> and{" "}
-          <code>NEXT_PUBLIC_USER_ID</code> in{" "}
-          <code>apps/web/.env.local</code> to talk to the dev API. See{" "}
-          <code>apps/web/.env.example</code>.
+          La identidad se gestiona mediante cookies de sesión seguras
+          proporcionadas por la API. No se requieren encabezados de identidad.
         </p>
       </Card>
     </>

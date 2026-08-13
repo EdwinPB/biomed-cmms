@@ -3,23 +3,26 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ApiError, getRequestHistory, getServiceRequest } from "../../../lib/api";
+import { ApiError, getRequestHistory, getServiceRequest } from "../../../../lib/api";
 import type {
   RequestEvent,
   RequestStatus,
   ServiceRequest,
-} from "../../../lib/types/api";
-import { formatDate, shortId } from "../../../lib/format";
-import { Button } from "../../../components/Button";
-import { Card } from "../../../components/Card";
-import { PageHeader } from "../../../components/PageHeader";
-import { PriorityBadge } from "../../../components/PriorityBadge";
-import { RequestStatusControl } from "../../../components/RequestStatusControl";
-import { StatusBadge } from "../../../components/StatusBadge";
+} from "../../../../lib/types/api";
+import { formatDate, shortId } from "../../../../lib/format";
+import { useAuth } from "../../../../components/AuthProvider";
+import { Button } from "../../../../components/Button";
+import { Card } from "../../../../components/Card";
+import { PageHeader } from "../../../../components/PageHeader";
+import { PriorityBadge } from "../../../../components/PriorityBadge";
+import { RequestStatusControl } from "../../../../components/RequestStatusControl";
+import { StatusBadge } from "../../../../components/StatusBadge";
 
 export default function RequestDetailPage() {
   const params = useParams<{ id: string }>();
   const requestId = params.id;
+  const { user } = useAuth();
+  const isStaff = user?.role === "admin" || user?.role === "biomedic";
 
   const [request, setRequest] = useState<ServiceRequest | null>(null);
   const [events, setEvents] = useState<RequestEvent[] | null>(null);
@@ -149,18 +152,20 @@ export default function RequestDetailPage() {
         </div>
       </Card>
 
-      <Card title="Update status">
-        <RequestStatusControl
-          requestId={request.id}
-          currentStatus={request.status}
-          onStatusChanged={handleStatusChanged}
-        />
-        {request.status === "resolved" || request.status === "cancelled" ? (
-          <p className="detail-note">
-            This request is closed. No further status changes are allowed.
-          </p>
-        ) : null}
-      </Card>
+      {isStaff ? (
+        <Card title="Update status">
+          <RequestStatusControl
+            requestId={request.id}
+            currentStatus={request.status}
+            onStatusChanged={handleStatusChanged}
+          />
+          {request.status === "resolved" || request.status === "cancelled" ? (
+            <p className="detail-note">
+              This request is closed. No further status changes are allowed.
+            </p>
+          ) : null}
+        </Card>
+      ) : null}
 
       <Card title="History">
         {events === null ? (

@@ -107,6 +107,58 @@ body {
   font-size: 16px;
 }
 
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-user__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.3;
+}
+
+.header-user__name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.header-user__tenant {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Auth pages */
+.auth-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+}
+
+.auth-card__title {
+  margin: 0 0 4px;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.auth-card__sub {
+  margin: 0 0 16px;
+  color: var(--text-muted);
+}
+
+.auth-card .form {
+  max-width: none;
+}
+
 /* Main */
 .main {
   padding: 24px;

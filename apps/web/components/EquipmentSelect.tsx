@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, listEquipment } from "../lib/api";
-import type { Equipment } from "../lib/types/api";
+import { ApiError, listEquipment, listSelectableEquipment } from "../lib/api";
+import type { Equipment, SelectableEquipment } from "../lib/types/api";
+import { useAuth } from "./AuthProvider";
 import { Button } from "./Button";
 
-function equipmentLabel(item: Equipment): string {
+type SelectableItem = Pick<Equipment, "id" | "name" | "asset_tag"> | Pick<SelectableEquipment, "id" | "name" | "asset_tag">;
+
+function equipmentLabel(item: SelectableItem): string {
   const name = item.name || item.asset_tag || "Unnamed equipment";
   return item.asset_tag ? `${name} — ${item.asset_tag}` : name;
 }
@@ -17,14 +20,18 @@ type Props = {
 };
 
 export function EquipmentSelect({ value, onChange, disabled }: Props) {
-  const [items, setItems] = useState<Equipment[] | null>(null);
+  const { user } = useAuth();
+  const [items, setItems] = useState<SelectableItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setItems(null);
     setError(null);
     try {
-      const data = await listEquipment();
+      const isRequester = user?.role === "requester";
+      const data = isRequester
+        ? await listSelectableEquipment()
+        : await listEquipment();
       setItems(data.equipment);
     } catch (err) {
       setError(
@@ -33,7 +40,7 @@ export function EquipmentSelect({ value, onChange, disabled }: Props) {
           : "Unable to load equipment. Please try again.",
       );
     }
-  }, []);
+  }, [user?.role]);
 
   useEffect(() => {
     load();

@@ -46,6 +46,11 @@ func (h *handler) createRFP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	role, err := RoleFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
 	var req createRFPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -60,7 +65,7 @@ func (h *handler) createRFP(w http.ResponseWriter, r *http.Request) {
 		Description:      req.Description,
 		DueAt:            req.DueAt,
 		CreatedBy:        userID,
-	})
+	}, role)
 	if err != nil {
 		h.writeRFPError(w, err)
 		return
@@ -71,6 +76,11 @@ func (h *handler) createRFP(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) transitionRFPStatus(w http.ResponseWriter, r *http.Request) {
 	tenantID, err := TenantIDFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	role, err := RoleFrom(r.Context())
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -88,7 +98,7 @@ func (h *handler) transitionRFPStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.rfps.TransitionRFP(r.Context(), tenantID, id, req.Status)
+	updated, err := h.rfps.TransitionRFP(r.Context(), tenantID, id, role, req.Status)
 	if err != nil {
 		h.writeRFPError(w, err)
 		return
@@ -103,6 +113,11 @@ func (h *handler) getRFP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	role, err := RoleFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -110,7 +125,7 @@ func (h *handler) getRFP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := h.rfps.GetRFP(r.Context(), tenantID, id)
+	created, err := h.rfps.GetRFP(r.Context(), tenantID, id, role)
 	if err != nil {
 		h.writeRFPError(w, err)
 		return
@@ -125,6 +140,11 @@ func (h *handler) getRFPByServiceRequest(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	role, err := RoleFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -132,7 +152,7 @@ func (h *handler) getRFPByServiceRequest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	created, err := h.rfps.GetRFPByServiceRequest(r.Context(), tenantID, id)
+	created, err := h.rfps.GetRFPByServiceRequest(r.Context(), tenantID, id, role)
 	if err != nil {
 		h.writeRFPError(w, err)
 		return
@@ -143,6 +163,8 @@ func (h *handler) getRFPByServiceRequest(w http.ResponseWriter, r *http.Request)
 
 func (h *handler) writeRFPError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, rfp.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden")
 	case errors.Is(err, rfp.ErrNotFound):
 		writeError(w, http.StatusNotFound, "rfp not found")
 	case errors.Is(err, rfp.ErrInvalidTransition), errors.Is(err, rfp.ErrConflict):

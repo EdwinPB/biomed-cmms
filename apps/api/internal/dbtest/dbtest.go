@@ -1,6 +1,11 @@
 // Package dbtest provides shared bootstrap for repository integration tests:
 // it creates the test database on demand, applies the embedded migrations, and
 // opens a connection pool. Tests skip when PostgreSQL is unreachable.
+//
+// Test packages run as separate binaries that share one test database, so
+// dbtest serializes them with a Postgres advisory lock held for the lifetime of
+// each test binary. This prevents a package's TRUNCATE statements from
+// clobbering another package's fixtures mid-test.
 package dbtest
 
 import (
@@ -22,10 +27,18 @@ import (
 	"github.com/edwinpolo/biomed-cmms/api/internal/migrations"
 )
 
+// advisoryLockKey serializes DB-using test binaries against each other. The
+// lock is held on a dedicated connection for the whole test process.
+const advisoryLockKey int64 = 0x62696F6D // "biomed"
+
 var (
 	setupOnce sync.Once
 	setupPool *pgxpool.Pool
 	setupErr  error
+
+	// lockConn is held open for the process lifetime; closing it would release
+	// the advisory lock and allow another test binary to interleave.
+	lockConn *pgx.Conn
 )
 
 // Pool returns a connection pool to the migrated test database, skipping the
@@ -54,30 +67,48 @@ func URL() string {
 func setup(ctx context.Context) (*pgxpool.Pool, error) {
 	url := URL()
 
-	if err := ensureDatabase(ctx, url); err != nil {
-		return nil, err
-	}
-	if err := applyMigrations(ctx, url); err != nil {
-		return nil, err
-	}
-	return pgxpool.New(ctx, url)
-}
-
-func ensureDatabase(ctx context.Context, url string) error {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	name := cfg.ConnConfig.Database
 	cfg.ConnConfig.Database = "postgres"
 
 	conn, err := pgx.ConnectConfig(ctx, cfg.ConnConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer conn.Close(ctx)
 
+	ok := false
+	defer func() {
+		if !ok {
+			conn.Close(ctx)
+		}
+	}()
+
+	// Serialize against other test binaries before touching the database.
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, advisoryLockKey); err != nil {
+		return nil, err
+	}
+
+	if err := ensureDatabase(ctx, conn, name); err != nil {
+		return nil, err
+	}
+	if err := applyMigrations(ctx, url); err != nil {
+		return nil, err
+	}
+
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+
+	lockConn = conn
+	ok = true
+	return pool, nil
+}
+
+func ensureDatabase(ctx context.Context, conn *pgx.Conn, name string) error {
 	var exists bool
 	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists); err != nil {
 		return err
@@ -85,7 +116,7 @@ func ensureDatabase(ctx context.Context, url string) error {
 	if exists {
 		return nil
 	}
-	_, err = conn.Exec(ctx, "CREATE DATABASE "+name)
+	_, err := conn.Exec(ctx, "CREATE DATABASE "+name)
 	return err
 }
 

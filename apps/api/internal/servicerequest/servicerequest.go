@@ -31,7 +31,10 @@ const (
 	StatusCancelled  Status = "cancelled"
 )
 
-var ErrNotFound = errors.New("service request: not found")
+var (
+	ErrNotFound  = errors.New("service request: not found")
+	ErrForbidden = errors.New("service request: forbidden")
+)
 
 // RequestEvent is an audit record of a status transition on a service request.
 type RequestEvent struct {

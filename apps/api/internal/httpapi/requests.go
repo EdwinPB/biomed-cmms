@@ -82,6 +82,11 @@ func (h *handler) transitionStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	role, err := RoleFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -95,7 +100,7 @@ func (h *handler) transitionStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.serviceRequests.TransitionRequest(r.Context(), tenantID, id, actorID, req.Status)
+	updated, err := h.serviceRequests.TransitionRequest(r.Context(), tenantID, id, actorID, role, req.Status)
 	if err != nil {
 		h.writeRequestError(w, err)
 		return
@@ -126,6 +131,16 @@ func (h *handler) requestHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	userID, err := UserIDFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	role, err := RoleFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -133,7 +148,7 @@ func (h *handler) requestHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, err := h.serviceRequests.RequestHistory(r.Context(), tenantID, id)
+	events, err := h.serviceRequests.RequestHistory(r.Context(), tenantID, id, userID, role)
 	if err != nil {
 		h.writeRequestError(w, err)
 		return
@@ -158,6 +173,16 @@ func (h *handler) getRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	userID, err := UserIDFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	role, err := RoleFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -165,7 +190,7 @@ func (h *handler) getRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	got, err := h.serviceRequests.GetRequest(r.Context(), tenantID, id)
+	got, err := h.serviceRequests.GetRequest(r.Context(), tenantID, id, userID, role)
 	if err != nil {
 		h.writeRequestError(w, err)
 		return
@@ -180,8 +205,18 @@ func (h *handler) listRequests(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
+	userID, err := UserIDFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	role, err := RoleFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
 
-	requests, err := h.serviceRequests.ListRequests(r.Context(), tenantID)
+	requests, err := h.serviceRequests.ListRequests(r.Context(), tenantID, userID, role)
 	if err != nil {
 		h.writeRequestError(w, err)
 		return
@@ -198,6 +233,8 @@ func (h *handler) writeRequestError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, servicerequest.ErrNotFound):
 		writeError(w, http.StatusNotFound, "service request not found")
+	case errors.Is(err, servicerequest.ErrForbidden):
+		writeError(w, http.StatusForbidden, "forbidden")
 	case errors.Is(err, servicerequest.ErrInvalidTransition):
 		writeError(w, http.StatusConflict, err.Error())
 	case isValidationError(err):

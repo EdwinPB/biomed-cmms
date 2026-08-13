@@ -8,13 +8,15 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/edwinpolo/biomed-cmms/api/internal/auth"
 	"github.com/edwinpolo/biomed-cmms/api/internal/rfp"
 )
 
 type fakeRepo struct {
-	createFn     func(ctx context.Context, params rfp.CreateParams) (rfp.RFP, error)
-	getByIDFn    func(ctx context.Context, tenantID, id uuid.UUID) (rfp.RFP, error)
-	transitionFn func(ctx context.Context, tenantID, id uuid.UUID, from, to rfp.Status) (rfp.RFP, error)
+	createFn              func(ctx context.Context, params rfp.CreateParams) (rfp.RFP, error)
+	getByIDFn             func(ctx context.Context, tenantID, id uuid.UUID) (rfp.RFP, error)
+	transitionFn          func(ctx context.Context, tenantID, id uuid.UUID, from, to rfp.Status) (rfp.RFP, error)
+	getByServiceRequestFn func(ctx context.Context, tenantID, serviceRequestID uuid.UUID) (rfp.RFP, error)
 
 	lastGetTenantID      uuid.UUID
 	lastTransitionTenant uuid.UUID
@@ -22,9 +24,12 @@ type fakeRepo struct {
 	lastTransitionFrom   rfp.Status
 	lastTransitionTo     rfp.Status
 	transitions          int
+	getByServiceRequest  int
+	creates              int
 }
 
 func (f *fakeRepo) Create(ctx context.Context, params rfp.CreateParams) (rfp.RFP, error) {
+	f.creates++
 	if f.createFn != nil {
 		return f.createFn(ctx, params)
 	}
@@ -39,7 +44,11 @@ func (f *fakeRepo) GetByID(ctx context.Context, tenantID, id uuid.UUID) (rfp.RFP
 	return rfp.RFP{}, errors.New("fakeRepo: GetByID not configured")
 }
 
-func (f *fakeRepo) GetByServiceRequest(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+func (f *fakeRepo) GetByServiceRequest(ctx context.Context, tenantID, serviceRequestID uuid.UUID) (rfp.RFP, error) {
+	f.getByServiceRequest++
+	if f.getByServiceRequestFn != nil {
+		return f.getByServiceRequestFn(ctx, tenantID, serviceRequestID)
+	}
 	return rfp.RFP{}, errors.New("fakeRepo: GetByServiceRequest not configured")
 }
 
@@ -93,7 +102,7 @@ func TestCreateRFPSuccess(t *testing.T) {
 	svc := New(fake)
 
 	params := validCreateParams()
-	got, err := svc.CreateRFP(context.Background(), params)
+	got, err := svc.CreateRFP(context.Background(), params, auth.RoleAdmin)
 	if err != nil {
 		t.Fatalf("CreateRFP() error = %v", err)
 	}
@@ -131,7 +140,7 @@ func TestCreateRFPValidation(t *testing.T) {
 			params := validCreateParams()
 			tc.mutate(&params)
 
-			_, err := svc.CreateRFP(context.Background(), params)
+			_, err := svc.CreateRFP(context.Background(), params, auth.RoleAdmin)
 			if !errors.Is(err, tc.want) {
 				t.Errorf("CreateRFP() error = %v, want %v", err, tc.want)
 			}
@@ -153,7 +162,7 @@ func TestCreateRFPEmptyStatusAllowed(t *testing.T) {
 	params := validCreateParams()
 	params.Status = ""
 
-	if _, err := svc.CreateRFP(context.Background(), params); err != nil {
+	if _, err := svc.CreateRFP(context.Background(), params, auth.RoleAdmin); err != nil {
 		t.Fatalf("CreateRFP() error = %v", err)
 	}
 	if !called {
@@ -185,7 +194,7 @@ func TestTransitionRFPAllowed(t *testing.T) {
 			}
 			svc := New(fake)
 
-			got, err := svc.TransitionRFP(context.Background(), tenantID, id, tc.to)
+			got, err := svc.TransitionRFP(context.Background(), tenantID, id, auth.RoleAdmin, tc.to)
 			if err != nil {
 				t.Fatalf("TransitionRFP() error = %v", err)
 			}
@@ -224,7 +233,7 @@ func TestTransitionRFPInvalidRejected(t *testing.T) {
 			}
 			svc := New(fake)
 
-			_, err := svc.TransitionRFP(context.Background(), tenantID, id, tc.to)
+			_, err := svc.TransitionRFP(context.Background(), tenantID, id, auth.RoleAdmin, tc.to)
 			if !errors.Is(err, rfp.ErrInvalidTransition) {
 				t.Fatalf("TransitionRFP() error = %v, want ErrInvalidTransition", err)
 			}
@@ -263,7 +272,7 @@ func TestTransitionRFPPublishPreconditions(t *testing.T) {
 			}
 			svc := New(fake)
 
-			_, err := svc.TransitionRFP(context.Background(), tenantID, id, rfp.StatusPublished)
+			_, err := svc.TransitionRFP(context.Background(), tenantID, id, auth.RoleAdmin, rfp.StatusPublished)
 			if !errors.Is(err, tc.want) {
 				t.Errorf("TransitionRFP() error = %v, want %v", err, tc.want)
 			}
@@ -289,7 +298,7 @@ func TestTransitionRFPValidPublishSucceeds(t *testing.T) {
 	}
 	svc := New(fake)
 
-	got, err := svc.TransitionRFP(context.Background(), tenantID, id, rfp.StatusPublished)
+	got, err := svc.TransitionRFP(context.Background(), tenantID, id, auth.RoleAdmin, rfp.StatusPublished)
 	if err != nil {
 		t.Fatalf("TransitionRFP() error = %v", err)
 	}
@@ -319,7 +328,7 @@ func TestTransitionRFPTenantIDPassed(t *testing.T) {
 	}
 	svc := New(fake)
 
-	if _, err := svc.TransitionRFP(context.Background(), tenantID, id, rfp.StatusPublished); err != nil {
+	if _, err := svc.TransitionRFP(context.Background(), tenantID, id, auth.RoleAdmin, rfp.StatusPublished); err != nil {
 		t.Fatalf("TransitionRFP() error = %v", err)
 	}
 	if fake.lastGetTenantID != tenantID {
@@ -339,7 +348,7 @@ func TestTransitionRFPNotFoundPropagated(t *testing.T) {
 	}}
 	svc := New(fake)
 
-	_, err := svc.TransitionRFP(context.Background(), uuid.New(), uuid.New(), rfp.StatusPublished)
+	_, err := svc.TransitionRFP(context.Background(), uuid.New(), uuid.New(), auth.RoleAdmin, rfp.StatusPublished)
 	if !errors.Is(err, rfp.ErrNotFound) {
 		t.Errorf("TransitionRFP() error = %v, want ErrNotFound", err)
 	}
@@ -352,7 +361,7 @@ func TestTransitionRFPGetErrorPropagated(t *testing.T) {
 	}}
 	svc := New(fake)
 
-	_, err := svc.TransitionRFP(context.Background(), uuid.New(), uuid.New(), rfp.StatusPublished)
+	_, err := svc.TransitionRFP(context.Background(), uuid.New(), uuid.New(), auth.RoleAdmin, rfp.StatusPublished)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("TransitionRFP() error = %v, want %v", err, wantErr)
 	}
@@ -372,8 +381,110 @@ func TestTransitionRFPTransitionErrorPropagated(t *testing.T) {
 	}
 	svc := New(fake)
 
-	_, err := svc.TransitionRFP(context.Background(), tenantID, id, rfp.StatusPublished)
+	_, err := svc.TransitionRFP(context.Background(), tenantID, id, auth.RoleAdmin, rfp.StatusPublished)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("TransitionRFP() error = %v, want %v", err, wantErr)
 	}
+}
+
+func TestRFPRequesterForbiddenAllMethods(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(t *testing.T, svc *Service, fake *fakeRepo)
+	}{
+		{
+			name: "CreateRFP",
+			call: func(t *testing.T, svc *Service, fake *fakeRepo) {
+				_, err := svc.CreateRFP(context.Background(), validCreateParams(), auth.RoleRequester)
+				if !errors.Is(err, rfp.ErrForbidden) {
+					t.Fatalf("CreateRFP() error = %v, want ErrForbidden", err)
+				}
+				if fake.creates != 0 {
+					t.Errorf("Create() called %d times, want 0", fake.creates)
+				}
+			},
+		},
+		{
+			name: "TransitionRFP",
+			call: func(t *testing.T, svc *Service, fake *fakeRepo) {
+				_, err := svc.TransitionRFP(context.Background(), uuid.New(), uuid.New(), auth.RoleRequester, rfp.StatusPublished)
+				if !errors.Is(err, rfp.ErrForbidden) {
+					t.Fatalf("TransitionRFP() error = %v, want ErrForbidden", err)
+				}
+				if fake.transitions != 0 {
+					t.Errorf("Transition() called %d times, want 0", fake.transitions)
+				}
+				if fake.lastGetTenantID != uuid.Nil {
+					t.Errorf("GetByID() called with tenant %v, want no call", fake.lastGetTenantID)
+				}
+			},
+		},
+		{
+			name: "GetRFP",
+			call: func(t *testing.T, svc *Service, fake *fakeRepo) {
+				_, err := svc.GetRFP(context.Background(), uuid.New(), uuid.New(), auth.RoleRequester)
+				if !errors.Is(err, rfp.ErrForbidden) {
+					t.Fatalf("GetRFP() error = %v, want ErrForbidden", err)
+				}
+				if fake.lastGetTenantID != uuid.Nil {
+					t.Errorf("GetByID() called with tenant %v, want no call", fake.lastGetTenantID)
+				}
+			},
+		},
+		{
+			name: "GetRFPByServiceRequest",
+			call: func(t *testing.T, svc *Service, fake *fakeRepo) {
+				_, err := svc.GetRFPByServiceRequest(context.Background(), uuid.New(), uuid.New(), auth.RoleRequester)
+				if !errors.Is(err, rfp.ErrForbidden) {
+					t.Fatalf("GetRFPByServiceRequest() error = %v, want ErrForbidden", err)
+				}
+				if fake.getByServiceRequest != 0 {
+					t.Errorf("GetByServiceRequest() called %d times, want 0", fake.getByServiceRequest)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeRepo{}
+			tc.call(t, New(fake), fake)
+		})
+	}
+}
+
+func TestRFPAdminAndBiomedicAllowed(t *testing.T) {
+	for _, role := range []auth.Role{auth.RoleAdmin, auth.RoleBiomedic} {
+		t.Run(string(role), func(t *testing.T) {
+			fake := &fakeRepo{
+				createFn: func(context.Context, rfp.CreateParams) (rfp.RFP, error) {
+					return validRFP(), nil
+				},
+				getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+					return futureRFP(uuid.New(), uuid.New(), rfp.StatusDraft), nil
+				},
+				getByServiceRequestFn: func(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+					return validRFP(), nil
+				},
+				transitionFn: func(context.Context, uuid.UUID, uuid.UUID, rfp.Status, rfp.Status) (rfp.RFP, error) {
+					return futureRFP(uuid.New(), uuid.New(), rfp.StatusPublished), nil
+				},
+			}
+			svc := New(fake)
+
+			if _, err := svc.CreateRFP(context.Background(), validCreateParams(), role); err != nil {
+				t.Errorf("CreateRFP() error = %v, want nil", err)
+			}
+			if _, err := svc.GetRFP(context.Background(), uuid.New(), uuid.New(), role); err != nil {
+				t.Errorf("GetRFP() error = %v, want nil", err)
+			}
+			if _, err := svc.GetRFPByServiceRequest(context.Background(), uuid.New(), uuid.New(), role); err != nil {
+				t.Errorf("GetRFPByServiceRequest() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func validRFP() rfp.RFP {
+	return futureRFP(uuid.New(), uuid.New(), rfp.StatusDraft)
 }

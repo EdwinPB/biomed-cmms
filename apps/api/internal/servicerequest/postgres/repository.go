@@ -53,10 +53,18 @@ func (r *Repository) Create(ctx context.Context, params servicerequest.CreatePar
 	return sr, nil
 }
 
-func (r *Repository) GetByID(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error) {
-	const query = `SELECT ` + serviceRequestColumns + ` FROM service_requests WHERE id = $1 AND tenant_id = $2`
+// GetByID returns a request scoped to tenantID and, when createdBy is non-nil,
+// to that creator. Missing rows, another tenant's rows, or another creator's
+// rows surface as servicerequest.ErrNotFound.
+func (r *Repository) GetByID(ctx context.Context, tenantID, id uuid.UUID, createdBy *uuid.UUID) (servicerequest.ServiceRequest, error) {
+	query := `SELECT ` + serviceRequestColumns + ` FROM service_requests WHERE id = $1 AND tenant_id = $2`
+	args := []any{id, tenantID}
+	if createdBy != nil {
+		query += ` AND created_by = $3`
+		args = append(args, *createdBy)
+	}
 
-	sr, err := scanServiceRequest(r.pool.QueryRow(ctx, query, id, tenantID))
+	sr, err := scanServiceRequest(r.pool.QueryRow(ctx, query, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
 	}
@@ -101,10 +109,18 @@ func (r *Repository) Transition(ctx context.Context, event servicerequest.Reques
 	return sr, nil
 }
 
-func (r *Repository) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error) {
-	const query = `SELECT ` + serviceRequestColumns + ` FROM service_requests WHERE tenant_id = $1 ORDER BY created_at DESC, id`
+// ListByTenant returns the tenant's requests, newest first, optionally
+// restricted to a single creator when createdBy is non-nil.
+func (r *Repository) ListByTenant(ctx context.Context, tenantID uuid.UUID, createdBy *uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	query := `SELECT ` + serviceRequestColumns + ` FROM service_requests WHERE tenant_id = $1`
+	args := []any{tenantID}
+	if createdBy != nil {
+		query += ` AND created_by = $2`
+		args = append(args, *createdBy)
+	}
+	query += ` ORDER BY created_at DESC, id`
 
-	rows, err := r.pool.Query(ctx, query, tenantID)
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list service requests by tenant: %w", err)
 	}
@@ -126,12 +142,19 @@ func (r *Repository) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]se
 
 // ListEvents returns the audit trail for a request, oldest first. The query is
 // tenant-scoped, and a request that does not exist (or belongs to another
-// tenant) is reported as ErrNotFound rather than as an empty history.
-func (r *Repository) ListEvents(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error) {
+// tenant, or another creator when createdBy is non-nil) is reported as
+// ErrNotFound rather than as an empty history.
+func (r *Repository) ListEvents(ctx context.Context, tenantID, requestID uuid.UUID, createdBy *uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	existsQuery := `SELECT EXISTS (SELECT 1 FROM service_requests WHERE id = $1 AND tenant_id = $2`
+	existsArgs := []any{requestID, tenantID}
+	if createdBy != nil {
+		existsQuery += ` AND created_by = $3`
+		existsArgs = append(existsArgs, *createdBy)
+	}
+	existsQuery += `)`
+
 	var exists bool
-	if err := r.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM service_requests WHERE id = $1 AND tenant_id = $2)`,
-		requestID, tenantID).Scan(&exists); err != nil {
+	if err := r.pool.QueryRow(ctx, existsQuery, existsArgs...).Scan(&exists); err != nil {
 		return nil, fmt.Errorf("check service request exists: %w", err)
 	}
 	if !exists {

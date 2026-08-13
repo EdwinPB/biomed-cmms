@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "./AuthProvider";
 
-const navItems = [
+const ALL_NAV_ITEMS = [
   { href: "/", label: "Dashboard" },
   { href: "/requests", label: "Service Requests" },
   { href: "/equipment", label: "Equipment" },
@@ -12,6 +13,12 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { user } = useAuth();
+  const isRequester = user?.role === "requester";
+
+  const navItems = isRequester
+    ? ALL_NAV_ITEMS.filter((item) => item.href === "/" || item.href === "/requests")
+    : ALL_NAV_ITEMS;
 
   return (
     <aside className="sidebar">

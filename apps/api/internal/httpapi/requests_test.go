@@ -14,19 +14,27 @@ import (
 	"github.com/edwinpolo/biomed-cmms/api/internal/servicerequest"
 	srservice "github.com/edwinpolo/biomed-cmms/api/internal/servicerequest/service"
 	"github.com/edwinpolo/biomed-cmms/api/internal/tenant"
+
+	"github.com/edwinpolo/biomed-cmms/api/internal/auth"
 )
 
 type fakeRequestService struct {
 	createFn                                       func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
-	transitionFn                                   func(ctx context.Context, tenantID, id, actorID uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error)
-	requestHistoryFn                               func(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error)
-	getRequestFn                                   func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error)
-	listRequestsFn                                 func(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error)
+	transitionFn                                   func(ctx context.Context, tenantID, id, actorID uuid.UUID, role auth.Role, to servicerequest.Status) (servicerequest.ServiceRequest, error)
+	requestHistoryFn                               func(ctx context.Context, tenantID, requestID, userID uuid.UUID, role auth.Role) ([]servicerequest.RequestEvent, error)
+	getRequestFn                                   func(ctx context.Context, tenantID, id, userID uuid.UUID, role auth.Role) (servicerequest.ServiceRequest, error)
+	listRequestsFn                                 func(ctx context.Context, tenantID, userID uuid.UUID, role auth.Role) ([]servicerequest.ServiceRequest, error)
 	gotCreateTenant, gotCreateUser                 uuid.UUID
 	gotTransitionTenant, gotTransitionID, gotActor uuid.UUID
+	gotTransitionRole                              auth.Role
 	gotHistoryTenant, gotHistoryRequest            uuid.UUID
+	gotHistoryUser                                 uuid.UUID
+	gotHistoryRole                                 auth.Role
 	gotGetTenant, gotGetID                         uuid.UUID
-	gotListTenant                                  uuid.UUID
+	gotGetUser                                     uuid.UUID
+	gotGetRole                                     auth.Role
+	gotListTenant, gotListUser                     uuid.UUID
+	gotListRole                                    auth.Role
 }
 
 func (f *fakeRequestService) CreateRequest(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
@@ -38,38 +46,45 @@ func (f *fakeRequestService) CreateRequest(ctx context.Context, params servicere
 	return servicerequest.ServiceRequest{}, errors.New("fakeRequestService: Create not configured")
 }
 
-func (f *fakeRequestService) TransitionRequest(ctx context.Context, tenantID, id, actorID uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error) {
+func (f *fakeRequestService) TransitionRequest(ctx context.Context, tenantID, id, actorID uuid.UUID, role auth.Role, to servicerequest.Status) (servicerequest.ServiceRequest, error) {
 	f.gotTransitionTenant = tenantID
 	f.gotTransitionID = id
 	f.gotActor = actorID
+	f.gotTransitionRole = role
 	if f.transitionFn != nil {
-		return f.transitionFn(ctx, tenantID, id, actorID, to)
+		return f.transitionFn(ctx, tenantID, id, actorID, role, to)
 	}
 	return servicerequest.ServiceRequest{}, errors.New("fakeRequestService: Transition not configured")
 }
 
-func (f *fakeRequestService) RequestHistory(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error) {
+func (f *fakeRequestService) RequestHistory(ctx context.Context, tenantID, requestID, userID uuid.UUID, role auth.Role) ([]servicerequest.RequestEvent, error) {
 	f.gotHistoryTenant = tenantID
 	f.gotHistoryRequest = requestID
+	f.gotHistoryUser = userID
+	f.gotHistoryRole = role
 	if f.requestHistoryFn != nil {
-		return f.requestHistoryFn(ctx, tenantID, requestID)
+		return f.requestHistoryFn(ctx, tenantID, requestID, userID, role)
 	}
 	return nil, errors.New("fakeRequestService: RequestHistory not configured")
 }
 
-func (f *fakeRequestService) GetRequest(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error) {
+func (f *fakeRequestService) GetRequest(ctx context.Context, tenantID, id, userID uuid.UUID, role auth.Role) (servicerequest.ServiceRequest, error) {
 	f.gotGetTenant = tenantID
 	f.gotGetID = id
+	f.gotGetUser = userID
+	f.gotGetRole = role
 	if f.getRequestFn != nil {
-		return f.getRequestFn(ctx, tenantID, id)
+		return f.getRequestFn(ctx, tenantID, id, userID, role)
 	}
 	return servicerequest.ServiceRequest{}, errors.New("fakeRequestService: GetRequest not configured")
 }
 
-func (f *fakeRequestService) ListRequests(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+func (f *fakeRequestService) ListRequests(ctx context.Context, tenantID, userID uuid.UUID, role auth.Role) ([]servicerequest.ServiceRequest, error) {
 	f.gotListTenant = tenantID
+	f.gotListUser = userID
+	f.gotListRole = role
 	if f.listRequestsFn != nil {
-		return f.listRequestsFn(ctx, tenantID)
+		return f.listRequestsFn(ctx, tenantID, userID, role)
 	}
 	return nil, errors.New("fakeRequestService: ListRequests not configured")
 }
@@ -81,11 +96,31 @@ const (
 
 func doRequestSvc(t *testing.T, svc ServiceRequestService, method, target, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, svc, &stubRFPService{}, &stubEquipmentService{})
+	h := NewHandler(&stubTenantService{}, testAuthService(), svc, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
 	}
+	addSessionCookie(req)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func doRequestSvcNoSession(t *testing.T, svc ServiceRequestService, method, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	h := NewHandler(&stubTenantService{}, testAuthService(), svc, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func doRequestSvcWithAuth(t *testing.T, svc ServiceRequestService, method, target, body string, auth *stubAuthService) *httptest.ResponseRecorder {
+	t.Helper()
+	h := NewHandler(&stubTenantService{}, auth, svc, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	addSessionCookie(req)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -97,8 +132,10 @@ func (s *stubTenantService) CreateTenant(context.Context, tenant.CreateParams) (
 	return tenant.Tenant{}, errors.New("stubTenantService: not configured")
 }
 
+// identityHeaders is retained for call-site compatibility; request identity now
+// comes from the session cookie attached by the request helpers.
 func identityHeaders() []string {
-	return []string{"X-Tenant-ID", testTenantID, "X-User-ID", testUserID}
+	return nil
 }
 
 func createdRequest() servicerequest.ServiceRequest {
@@ -153,50 +190,49 @@ func TestCreateRequestSuccess(t *testing.T) {
 	}
 }
 
-func TestCreateRequestMissingTenantHeader(t *testing.T) {
+func TestCreateRequestWithoutSession(t *testing.T) {
 	fake := &fakeRequestService{createFn: func(context.Context, servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
 		return createdRequest(), nil
 	}}
 
-	rec := doRequestSvc(t, fake, http.MethodPost, "/api/v1/requests",
-		`{"equipment_id":"55555555-5555-5555-5555-555555555555","title":"T","description":"D"}`,
-		"X-User-ID", testUserID)
+	rec := doRequestSvcNoSession(t, fake, http.MethodPost, "/api/v1/requests",
+		`{"equipment_id":"55555555-5555-5555-5555-555555555555","title":"T","description":"D"}`)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestCreateRequestMissingUserHeader(t *testing.T) {
+func TestCreateRequestInvalidSession(t *testing.T) {
 	fake := &fakeRequestService{createFn: func(context.Context, servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
 		return createdRequest(), nil
 	}}
 
-	rec := doRequestSvc(t, fake, http.MethodPost, "/api/v1/requests",
+	rec := doRequestSvcWithAuth(t, fake, http.MethodPost, "/api/v1/requests",
 		`{"equipment_id":"55555555-5555-5555-5555-555555555555","title":"T","description":"D"}`,
-		"X-Tenant-ID", testTenantID)
+		authRejectingService(auth.ErrSessionNotFound))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestCreateRequestInvalidTenantHeader(t *testing.T) {
+func TestCreateRequestExpiredSession(t *testing.T) {
 	fake := &fakeRequestService{}
 
-	rec := doRequestSvc(t, fake, http.MethodPost, "/api/v1/requests", `{}`,
-		"X-Tenant-ID", "not-a-uuid", "X-User-ID", testUserID)
+	rec := doRequestSvcWithAuth(t, fake, http.MethodPost, "/api/v1/requests", `{}`,
+		authRejectingService(auth.ErrSessionExpired))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestCreateRequestInvalidUserHeader(t *testing.T) {
+func TestCreateRequestInactiveUserSession(t *testing.T) {
 	fake := &fakeRequestService{}
 
-	rec := doRequestSvc(t, fake, http.MethodPost, "/api/v1/requests", `{}`,
-		"X-Tenant-ID", testTenantID, "X-User-ID", "not-a-uuid")
+	rec := doRequestSvcWithAuth(t, fake, http.MethodPost, "/api/v1/requests", `{}`,
+		authRejectingService(auth.ErrUserInactive))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -259,7 +295,7 @@ func TestCreateRequestInternalError(t *testing.T) {
 }
 
 func TestTransitionStatusSuccess(t *testing.T) {
-	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role, servicerequest.Status) (servicerequest.ServiceRequest, error) {
 		sr := createdRequest()
 		sr.Status = servicerequest.StatusAssigned
 		return sr, nil
@@ -287,13 +323,64 @@ func TestTransitionStatusSuccess(t *testing.T) {
 	if fake.gotActor != uuid.MustParse(testUserID) {
 		t.Errorf("TransitionRequest() actor = %v, want %v", fake.gotActor, testUserID)
 	}
+	if fake.gotTransitionRole != auth.RoleAdmin {
+		t.Errorf("TransitionRequest() role = %q, want admin", fake.gotTransitionRole)
+	}
 }
 
-func TestTransitionStatusMissingUserHeader(t *testing.T) {
+func TestTransitionStatusRequesterForbidden(t *testing.T) {
+	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+		return servicerequest.ServiceRequest{}, servicerequest.ErrForbidden
+	}}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodPatch, "/api/v1/requests/44444444-4444-4444-4444-444444444444/status",
+		`{"status":"assigned"}`, authWithRole(auth.RoleRequester))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != `{"error":"forbidden"}`+"\n" {
+		t.Errorf("body = %q, want %q", got, `{"error":"forbidden"}`+"\n")
+	}
+	if fake.gotTransitionRole != auth.RoleRequester {
+		t.Errorf("TransitionRequest() role = %q, want requester", fake.gotTransitionRole)
+	}
+}
+
+func TestTransitionStatusBiomedicAllowed(t *testing.T) {
+	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+		sr := createdRequest()
+		sr.Status = servicerequest.StatusAssigned
+		return sr, nil
+	}}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodPatch, "/api/v1/requests/44444444-4444-4444-4444-444444444444/status",
+		`{"status":"assigned"}`, authWithRole(auth.RoleBiomedic))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if fake.gotTransitionRole != auth.RoleBiomedic {
+		t.Errorf("TransitionRequest() role = %q, want biomedic", fake.gotTransitionRole)
+	}
+}
+
+func TestTransitionStatusWithoutSession(t *testing.T) {
 	fake := &fakeRequestService{}
 
-	rec := doRequestSvc(t, fake, http.MethodPatch, "/api/v1/requests/44444444-4444-4444-4444-444444444444/status",
-		`{"status":"assigned"}`, "X-Tenant-ID", testTenantID)
+	rec := doRequestSvcNoSession(t, fake, http.MethodPatch, "/api/v1/requests/44444444-4444-4444-4444-444444444444/status",
+		`{"status":"assigned"}`)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestTransitionStatusInvalidSession(t *testing.T) {
+	fake := &fakeRequestService{}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodPatch, "/api/v1/requests/44444444-4444-4444-4444-444444444444/status",
+		`{"status":"assigned"}`, authRejectingService(auth.ErrSessionNotFound))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -301,7 +388,7 @@ func TestTransitionStatusMissingUserHeader(t *testing.T) {
 }
 
 func TestTransitionStatusInvalidTransition(t *testing.T) {
-	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role, servicerequest.Status) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, servicerequest.ErrInvalidTransition
 	}}
 
@@ -317,7 +404,7 @@ func TestTransitionStatusInvalidTransition(t *testing.T) {
 }
 
 func TestTransitionStatusNotFound(t *testing.T) {
-	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role, servicerequest.Status) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
 	}}
 
@@ -340,11 +427,22 @@ func TestTransitionStatusInvalidPathID(t *testing.T) {
 	}
 }
 
-func TestTransitionStatusMissingTenantHeader(t *testing.T) {
+func TestTransitionStatusInactiveUserSession(t *testing.T) {
 	fake := &fakeRequestService{}
 
-	rec := doRequestSvc(t, fake, http.MethodPatch, "/api/v1/requests/44444444-4444-4444-4444-444444444444/status",
-		`{"status":"assigned"}`, "X-User-ID", testUserID)
+	rec := doRequestSvcWithAuth(t, fake, http.MethodPatch, "/api/v1/requests/44444444-4444-4444-4444-444444444444/status",
+		`{"status":"assigned"}`, authRejectingService(auth.ErrUserInactive))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestTransitionStatusExpiredSession(t *testing.T) {
+	fake := &fakeRequestService{}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodPatch, "/api/v1/requests/44444444-4444-4444-4444-444444444444/status",
+		`{"status":"assigned"}`, authRejectingService(auth.ErrSessionExpired))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -363,7 +461,7 @@ func TestTransitionStatusMalformedBody(t *testing.T) {
 }
 
 func TestTransitionStatusInternalError(t *testing.T) {
-	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role, servicerequest.Status) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, errors.New("connection reset")
 	}}
 
@@ -402,7 +500,7 @@ func testEvents() []servicerequest.RequestEvent {
 }
 
 func TestRequestHistorySuccess(t *testing.T) {
-	fake := &fakeRequestService{requestHistoryFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	fake := &fakeRequestService{requestHistoryFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.RequestEvent, error) {
 		return testEvents(), nil
 	}}
 
@@ -445,7 +543,7 @@ func TestRequestHistorySuccess(t *testing.T) {
 }
 
 func TestRequestHistoryEmpty(t *testing.T) {
-	fake := &fakeRequestService{requestHistoryFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	fake := &fakeRequestService{requestHistoryFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.RequestEvent, error) {
 		return []servicerequest.RequestEvent{}, nil
 	}}
 
@@ -467,21 +565,21 @@ func TestRequestHistoryEmpty(t *testing.T) {
 	}
 }
 
-func TestRequestHistoryMissingTenant(t *testing.T) {
+func TestRequestHistoryWithoutSession(t *testing.T) {
 	fake := &fakeRequestService{}
 
-	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444/history", "")
+	rec := doRequestSvcNoSession(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444/history", "")
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestRequestHistoryInvalidTenant(t *testing.T) {
+func TestRequestHistoryInvalidSession(t *testing.T) {
 	fake := &fakeRequestService{}
 
-	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444/history",
-		"", "X-Tenant-ID", "not-a-uuid")
+	rec := doRequestSvcWithAuth(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444/history",
+		"", authRejectingService(auth.ErrSessionNotFound))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -500,7 +598,7 @@ func TestRequestHistoryInvalidUUID(t *testing.T) {
 }
 
 func TestRequestHistoryNotFound(t *testing.T) {
-	fake := &fakeRequestService{requestHistoryFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	fake := &fakeRequestService{requestHistoryFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.RequestEvent, error) {
 		return nil, servicerequest.ErrNotFound
 	}}
 
@@ -513,7 +611,7 @@ func TestRequestHistoryNotFound(t *testing.T) {
 }
 
 func TestRequestHistoryInternalError(t *testing.T) {
-	fake := &fakeRequestService{requestHistoryFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	fake := &fakeRequestService{requestHistoryFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.RequestEvent, error) {
 		return nil, errors.New("connection reset")
 	}}
 
@@ -544,7 +642,7 @@ func testServiceRequest() servicerequest.ServiceRequest {
 }
 
 func TestGetRequestSuccess(t *testing.T) {
-	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) (servicerequest.ServiceRequest, error) {
 		return testServiceRequest(), nil
 	}}
 
@@ -575,10 +673,10 @@ func TestGetRequestSuccess(t *testing.T) {
 	}
 }
 
-func TestGetRequestMissingTenant(t *testing.T) {
+func TestGetRequestWithoutSession(t *testing.T) {
 	fake := &fakeRequestService{}
 
-	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444", "")
+	rec := doRequestSvcNoSession(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444", "")
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -596,7 +694,7 @@ func TestGetRequestInvalidUUID(t *testing.T) {
 }
 
 func TestGetRequestNotFound(t *testing.T) {
-	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
 	}}
 
@@ -609,7 +707,7 @@ func TestGetRequestNotFound(t *testing.T) {
 }
 
 func TestGetRequestWrongTenantBehavesAsNotFound(t *testing.T) {
-	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
 	}}
 
@@ -622,7 +720,7 @@ func TestGetRequestWrongTenantBehavesAsNotFound(t *testing.T) {
 }
 
 func TestGetRequestInternalError(t *testing.T) {
-	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, errors.New("connection reset")
 	}}
 
@@ -642,7 +740,7 @@ func TestListRequestsSuccess(t *testing.T) {
 	second.ID = uuid.MustParse("77777777-7777-7777-7777-777777777777")
 	second.Title = "Infusion pump alarm"
 	second.Status = servicerequest.StatusResolved
-	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.ServiceRequest, error) {
 		return []servicerequest.ServiceRequest{testServiceRequest(), second}, nil
 	}}
 
@@ -667,7 +765,7 @@ func TestListRequestsSuccess(t *testing.T) {
 }
 
 func TestListRequestsEmpty(t *testing.T) {
-	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.ServiceRequest, error) {
 		return []servicerequest.ServiceRequest{}, nil
 	}}
 
@@ -688,10 +786,10 @@ func TestListRequestsEmpty(t *testing.T) {
 	}
 }
 
-func TestListRequestsMissingTenant(t *testing.T) {
+func TestListRequestsWithoutSession(t *testing.T) {
 	fake := &fakeRequestService{}
 
-	rec := doRequestSvc(t, fake, http.MethodGet, "/api/v1/requests", "")
+	rec := doRequestSvcNoSession(t, fake, http.MethodGet, "/api/v1/requests", "")
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -699,7 +797,7 @@ func TestListRequestsMissingTenant(t *testing.T) {
 }
 
 func TestListRequestsInternalError(t *testing.T) {
-	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.ServiceRequest, error) {
 		return nil, errors.New("connection reset")
 	}}
 
@@ -710,5 +808,136 @@ func TestListRequestsInternalError(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "connection reset") {
 		t.Errorf("body leaks internal error: %q", rec.Body.String())
+	}
+}
+
+// authWithRole returns a stub authenticating the default principal with the
+// given role, for read-authorization propagation tests.
+func authWithRole(role auth.Role) *stubAuthService {
+	return &stubAuthService{authenticateFn: func(context.Context, string) (auth.Principal, error) {
+		p := testSessionPrincipal()
+		p.Role = role
+		return p, nil
+	}}
+}
+
+func TestListRequestsRequesterScopesToUser(t *testing.T) {
+	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.ServiceRequest, error) {
+		return []servicerequest.ServiceRequest{}, nil
+	}}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodGet, "/api/v1/requests", "",
+		authWithRole(auth.RoleRequester))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if fake.gotListRole != auth.RoleRequester {
+		t.Errorf("ListRequests() role = %q, want requester", fake.gotListRole)
+	}
+	if fake.gotListUser != uuid.MustParse(testUserID) {
+		t.Errorf("ListRequests() user = %v, want %v", fake.gotListUser, testUserID)
+	}
+}
+
+func TestListRequestsAdminUnfiltered(t *testing.T) {
+	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.ServiceRequest, error) {
+		return []servicerequest.ServiceRequest{}, nil
+	}}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodGet, "/api/v1/requests", "",
+		authWithRole(auth.RoleAdmin))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if fake.gotListRole != auth.RoleAdmin {
+		t.Errorf("ListRequests() role = %q, want admin", fake.gotListRole)
+	}
+}
+
+func TestListRequestsBiomedicUnfiltered(t *testing.T) {
+	fake := &fakeRequestService{listRequestsFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.ServiceRequest, error) {
+		return []servicerequest.ServiceRequest{}, nil
+	}}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodGet, "/api/v1/requests", "",
+		authWithRole(auth.RoleBiomedic))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if fake.gotListRole != auth.RoleBiomedic {
+		t.Errorf("ListRequests() role = %q, want biomedic", fake.gotListRole)
+	}
+}
+
+func TestGetRequestRequesterScopesToUser(t *testing.T) {
+	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) (servicerequest.ServiceRequest, error) {
+		return testServiceRequest(), nil
+	}}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444", "",
+		authWithRole(auth.RoleRequester))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if fake.gotGetRole != auth.RoleRequester {
+		t.Errorf("GetRequest() role = %q, want requester", fake.gotGetRole)
+	}
+	if fake.gotGetUser != uuid.MustParse(testUserID) {
+		t.Errorf("GetRequest() user = %v, want %v", fake.gotGetUser, testUserID)
+	}
+}
+
+func TestGetRequestAdminUnfiltered(t *testing.T) {
+	fake := &fakeRequestService{getRequestFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) (servicerequest.ServiceRequest, error) {
+		return testServiceRequest(), nil
+	}}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444", "",
+		authWithRole(auth.RoleAdmin))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if fake.gotGetRole != auth.RoleAdmin {
+		t.Errorf("GetRequest() role = %q, want admin", fake.gotGetRole)
+	}
+}
+
+func TestRequestHistoryRequesterScopesToUser(t *testing.T) {
+	fake := &fakeRequestService{requestHistoryFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.RequestEvent, error) {
+		return []servicerequest.RequestEvent{}, nil
+	}}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444/history", "",
+		authWithRole(auth.RoleRequester))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if fake.gotHistoryRole != auth.RoleRequester {
+		t.Errorf("RequestHistory() role = %q, want requester", fake.gotHistoryRole)
+	}
+	if fake.gotHistoryUser != uuid.MustParse(testUserID) {
+		t.Errorf("RequestHistory() user = %v, want %v", fake.gotHistoryUser, testUserID)
+	}
+}
+
+func TestRequestHistoryAdminUnfiltered(t *testing.T) {
+	fake := &fakeRequestService{requestHistoryFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.RequestEvent, error) {
+		return []servicerequest.RequestEvent{}, nil
+	}}
+
+	rec := doRequestSvcWithAuth(t, fake, http.MethodGet, "/api/v1/requests/44444444-4444-4444-4444-444444444444/history", "",
+		authWithRole(auth.RoleAdmin))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if fake.gotHistoryRole != auth.RoleAdmin {
+		t.Errorf("RequestHistory() role = %q, want admin", fake.gotHistoryRole)
 	}
 }

@@ -38,6 +38,9 @@ func TestCORSPreflightSucceedsForAllowedOrigin(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != corsAllowHeaders {
 		t.Errorf("Access-Control-Allow-Headers = %q, want %q", got, corsAllowHeaders)
 	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != corsAllowCredentials {
+		t.Errorf("Access-Control-Allow-Credentials = %q, want %q", got, corsAllowCredentials)
+	}
 }
 
 func TestCORSPreflightFromUnknownOriginGetsNoCORSHeaders(t *testing.T) {
@@ -75,7 +78,7 @@ func TestCORSPreflightWithoutOrigin(t *testing.T) {
 }
 
 func TestCORSPreflightRoutedThroughRealHandler(t *testing.T) {
-	h := CORS(testAllowedOrigin)(NewHandler(&stubTenantService{}, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}))
+	h := CORS(testAllowedOrigin)(NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName))
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/requests", nil)
 	req.Header.Set("Origin", testAllowedOrigin)
@@ -90,7 +93,7 @@ func TestCORSPreflightRoutedThroughRealHandler(t *testing.T) {
 }
 
 func TestCORSAddsHeadersToActualResponse(t *testing.T) {
-	h := CORS(testAllowedOrigin)(NewHandler(&stubTenantService{}, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}))
+	h := CORS(testAllowedOrigin)(NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName))
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	req.Header.Set("Origin", testAllowedOrigin)
@@ -106,6 +109,9 @@ func TestCORSAddsHeadersToActualResponse(t *testing.T) {
 	}
 	if got := rec.Header().Get("Vary"); !strings.Contains(got, "Origin") {
 		t.Errorf("Vary = %q, want it to include Origin", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != corsAllowCredentials {
+		t.Errorf("Access-Control-Allow-Credentials = %q, want %q", got, corsAllowCredentials)
 	}
 
 	var body map[string]string

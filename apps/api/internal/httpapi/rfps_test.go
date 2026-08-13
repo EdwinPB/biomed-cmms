@@ -13,88 +13,118 @@ import (
 
 	"github.com/edwinpolo/biomed-cmms/api/internal/rfp"
 	rfpservice "github.com/edwinpolo/biomed-cmms/api/internal/rfp/service"
+
+	"github.com/edwinpolo/biomed-cmms/api/internal/auth"
 )
 
 type fakeRFPService struct {
-	createFn             func(ctx context.Context, params rfp.CreateParams) (rfp.RFP, error)
-	transitionFn         func(ctx context.Context, tenantID, id uuid.UUID, to rfp.Status) (rfp.RFP, error)
-	getFn                func(ctx context.Context, tenantID, id uuid.UUID) (rfp.RFP, error)
-	getBySRFn            func(ctx context.Context, tenantID, serviceRequestID uuid.UUID) (rfp.RFP, error)
+	createFn             func(ctx context.Context, params rfp.CreateParams, role auth.Role) (rfp.RFP, error)
+	transitionFn         func(ctx context.Context, tenantID, id uuid.UUID, role auth.Role, to rfp.Status) (rfp.RFP, error)
+	getFn                func(ctx context.Context, tenantID, id uuid.UUID, role auth.Role) (rfp.RFP, error)
+	getBySRFn            func(ctx context.Context, tenantID, serviceRequestID uuid.UUID, role auth.Role) (rfp.RFP, error)
 	gotCreateTenant      uuid.UUID
 	gotCreateUser        uuid.UUID
 	gotCreateServiceReq  uuid.UUID
+	gotCreateRole        auth.Role
 	gotTransitionTenant  uuid.UUID
 	gotTransitionID      uuid.UUID
 	gotTransitionStatus  rfp.Status
+	gotTransitionRole    auth.Role
 	gotGetTenant         uuid.UUID
 	gotGetID             uuid.UUID
+	gotGetRole           auth.Role
 	gotGetBySRTenant     uuid.UUID
 	gotGetBySRServiceReq uuid.UUID
+	gotGetBySRRole       auth.Role
 }
 
-func (f *fakeRFPService) CreateRFP(ctx context.Context, params rfp.CreateParams) (rfp.RFP, error) {
+func (f *fakeRFPService) CreateRFP(ctx context.Context, params rfp.CreateParams, role auth.Role) (rfp.RFP, error) {
 	f.gotCreateTenant = params.TenantID
 	f.gotCreateUser = params.CreatedBy
 	f.gotCreateServiceReq = params.ServiceRequestID
+	f.gotCreateRole = role
 	if f.createFn != nil {
-		return f.createFn(ctx, params)
+		return f.createFn(ctx, params, role)
 	}
 	return rfp.RFP{}, errors.New("fakeRFPService: Create not configured")
 }
 
-func (f *fakeRFPService) TransitionRFP(ctx context.Context, tenantID, id uuid.UUID, to rfp.Status) (rfp.RFP, error) {
+func (f *fakeRFPService) TransitionRFP(ctx context.Context, tenantID, id uuid.UUID, role auth.Role, to rfp.Status) (rfp.RFP, error) {
 	f.gotTransitionTenant = tenantID
 	f.gotTransitionID = id
 	f.gotTransitionStatus = to
+	f.gotTransitionRole = role
 	if f.transitionFn != nil {
-		return f.transitionFn(ctx, tenantID, id, to)
+		return f.transitionFn(ctx, tenantID, id, role, to)
 	}
 	return rfp.RFP{}, errors.New("fakeRFPService: Transition not configured")
 }
 
-func (f *fakeRFPService) GetRFP(ctx context.Context, tenantID, id uuid.UUID) (rfp.RFP, error) {
+func (f *fakeRFPService) GetRFP(ctx context.Context, tenantID, id uuid.UUID, role auth.Role) (rfp.RFP, error) {
 	f.gotGetTenant = tenantID
 	f.gotGetID = id
+	f.gotGetRole = role
 	if f.getFn != nil {
-		return f.getFn(ctx, tenantID, id)
+		return f.getFn(ctx, tenantID, id, role)
 	}
 	return rfp.RFP{}, errors.New("fakeRFPService: Get not configured")
 }
 
-func (f *fakeRFPService) GetRFPByServiceRequest(ctx context.Context, tenantID, serviceRequestID uuid.UUID) (rfp.RFP, error) {
+func (f *fakeRFPService) GetRFPByServiceRequest(ctx context.Context, tenantID, serviceRequestID uuid.UUID, role auth.Role) (rfp.RFP, error) {
 	f.gotGetBySRTenant = tenantID
 	f.gotGetBySRServiceReq = serviceRequestID
+	f.gotGetBySRRole = role
 	if f.getBySRFn != nil {
-		return f.getBySRFn(ctx, tenantID, serviceRequestID)
+		return f.getBySRFn(ctx, tenantID, serviceRequestID, role)
 	}
 	return rfp.RFP{}, errors.New("fakeRFPService: GetByServiceRequest not configured")
 }
 
 type stubRFPService struct{}
 
-func (s *stubRFPService) CreateRFP(context.Context, rfp.CreateParams) (rfp.RFP, error) {
+func (s *stubRFPService) CreateRFP(context.Context, rfp.CreateParams, auth.Role) (rfp.RFP, error) {
 	return rfp.RFP{}, errors.New("stubRFPService: Create not configured")
 }
 
-func (s *stubRFPService) TransitionRFP(context.Context, uuid.UUID, uuid.UUID, rfp.Status) (rfp.RFP, error) {
+func (s *stubRFPService) TransitionRFP(context.Context, uuid.UUID, uuid.UUID, auth.Role, rfp.Status) (rfp.RFP, error) {
 	return rfp.RFP{}, errors.New("stubRFPService: Transition not configured")
 }
 
-func (s *stubRFPService) GetRFP(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+func (s *stubRFPService) GetRFP(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
 	return rfp.RFP{}, errors.New("stubRFPService: Get not configured")
 }
 
-func (s *stubRFPService) GetRFPByServiceRequest(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+func (s *stubRFPService) GetRFPByServiceRequest(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
 	return rfp.RFP{}, errors.New("stubRFPService: GetByServiceRequest not configured")
 }
 
 func doRFPSvc(t *testing.T, svc RFPService, method, target, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, &stubRequestService{}, svc, &stubEquipmentService{})
+	h := NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, svc, &stubEquipmentService{}, testSessionCookieName)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
 	}
+	addSessionCookie(req)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func doRFPSvcNoSession(t *testing.T, svc RFPService, method, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	h := NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, svc, &stubEquipmentService{}, testSessionCookieName)
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func doRFPSvcWithAuth(t *testing.T, svc RFPService, method, target, body string, auth *stubAuthService) *httptest.ResponseRecorder {
+	t.Helper()
+	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, svc, &stubEquipmentService{}, testSessionCookieName)
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	addSessionCookie(req)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -117,7 +147,7 @@ func createdRFP() rfp.RFP {
 }
 
 func TestCreateRFPSuccess(t *testing.T) {
-	fake := &fakeRFPService{createFn: func(context.Context, rfp.CreateParams) (rfp.RFP, error) {
+	fake := &fakeRFPService{createFn: func(context.Context, rfp.CreateParams, auth.Role) (rfp.RFP, error) {
 		return createdRFP(), nil
 	}}
 
@@ -161,10 +191,13 @@ func TestCreateRFPSuccess(t *testing.T) {
 	if fake.gotCreateServiceReq != uuid.MustParse("77777777-7777-7777-7777-777777777777") {
 		t.Errorf("CreateRFP() service_request_id = %v", fake.gotCreateServiceReq)
 	}
+	if fake.gotCreateRole != auth.RoleAdmin {
+		t.Errorf("CreateRFP() role = %q, want admin", fake.gotCreateRole)
+	}
 }
 
 func TestCreateRFPWithoutDueAt(t *testing.T) {
-	fake := &fakeRFPService{createFn: func(context.Context, rfp.CreateParams) (rfp.RFP, error) {
+	fake := &fakeRFPService{createFn: func(context.Context, rfp.CreateParams, auth.Role) (rfp.RFP, error) {
 		return createdRFP(), nil
 	}}
 
@@ -177,35 +210,34 @@ func TestCreateRFPWithoutDueAt(t *testing.T) {
 	}
 }
 
-func TestCreateRFPMissingTenant(t *testing.T) {
+func TestCreateRFPWithoutSession(t *testing.T) {
 	fake := &fakeRFPService{}
 
-	rec := doRFPSvc(t, fake, http.MethodPost, "/api/v1/rfps",
-		`{"service_request_id":"77777777-7777-7777-7777-777777777777","title":"T","description":"D"}`,
-		"X-User-ID", testUserID)
+	rec := doRFPSvcNoSession(t, fake, http.MethodPost, "/api/v1/rfps",
+		`{"service_request_id":"77777777-7777-7777-7777-777777777777","title":"T","description":"D"}`)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestCreateRFPMissingUser(t *testing.T) {
+func TestCreateRFPInvalidSession(t *testing.T) {
 	fake := &fakeRFPService{}
 
-	rec := doRFPSvc(t, fake, http.MethodPost, "/api/v1/rfps",
+	rec := doRFPSvcWithAuth(t, fake, http.MethodPost, "/api/v1/rfps",
 		`{"service_request_id":"77777777-7777-7777-7777-777777777777","title":"T","description":"D"}`,
-		"X-Tenant-ID", testTenantID)
+		authRejectingService(auth.ErrSessionNotFound))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestCreateRFPInvalidTenant(t *testing.T) {
+func TestCreateRFPExpiredSession(t *testing.T) {
 	fake := &fakeRFPService{}
 
-	rec := doRFPSvc(t, fake, http.MethodPost, "/api/v1/rfps", `{}`,
-		"X-Tenant-ID", "not-a-uuid", "X-User-ID", testUserID)
+	rec := doRFPSvcWithAuth(t, fake, http.MethodPost, "/api/v1/rfps", `{}`,
+		authRejectingService(auth.ErrSessionExpired))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -249,7 +281,7 @@ func TestCreateRFPInvalidDueAt(t *testing.T) {
 }
 
 func TestCreateRFPValidationError(t *testing.T) {
-	fake := &fakeRFPService{createFn: func(context.Context, rfp.CreateParams) (rfp.RFP, error) {
+	fake := &fakeRFPService{createFn: func(context.Context, rfp.CreateParams, auth.Role) (rfp.RFP, error) {
 		return rfp.RFP{}, rfpservice.ErrTitleRequired
 	}}
 
@@ -264,7 +296,7 @@ func TestCreateRFPValidationError(t *testing.T) {
 }
 
 func TestCreateRFPConflict(t *testing.T) {
-	fake := &fakeRFPService{createFn: func(context.Context, rfp.CreateParams) (rfp.RFP, error) {
+	fake := &fakeRFPService{createFn: func(context.Context, rfp.CreateParams, auth.Role) (rfp.RFP, error) {
 		return rfp.RFP{}, rfp.ErrConflict
 	}}
 
@@ -278,7 +310,7 @@ func TestCreateRFPConflict(t *testing.T) {
 }
 
 func TestCreateRFPInternalError(t *testing.T) {
-	fake := &fakeRFPService{createFn: func(context.Context, rfp.CreateParams) (rfp.RFP, error) {
+	fake := &fakeRFPService{createFn: func(context.Context, rfp.CreateParams, auth.Role) (rfp.RFP, error) {
 		return rfp.RFP{}, errors.New("connection reset")
 	}}
 
@@ -295,7 +327,7 @@ func TestCreateRFPInternalError(t *testing.T) {
 }
 
 func TestGetRFPSuccess(t *testing.T) {
-	fake := &fakeRFPService{getFn: func(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+	fake := &fakeRFPService{getFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
 		return createdRFP(), nil
 	}}
 
@@ -318,12 +350,15 @@ func TestGetRFPSuccess(t *testing.T) {
 	if fake.gotGetID != uuid.MustParse("66666666-6666-6666-6666-666666666666") {
 		t.Errorf("GetRFP() id = %v", fake.gotGetID)
 	}
+	if fake.gotGetRole != auth.RoleAdmin {
+		t.Errorf("GetRFP() role = %q, want admin", fake.gotGetRole)
+	}
 }
 
-func TestGetRFPMissingTenant(t *testing.T) {
+func TestGetRFPWithoutSession(t *testing.T) {
 	fake := &fakeRFPService{}
 
-	rec := doRFPSvc(t, fake, http.MethodGet, "/api/v1/rfps/66666666-6666-6666-6666-666666666666", "")
+	rec := doRFPSvcNoSession(t, fake, http.MethodGet, "/api/v1/rfps/66666666-6666-6666-6666-666666666666", "")
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -341,7 +376,7 @@ func TestGetRFPInvalidUUID(t *testing.T) {
 }
 
 func TestGetRFPNotFound(t *testing.T) {
-	fake := &fakeRFPService{getFn: func(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+	fake := &fakeRFPService{getFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
 		return rfp.RFP{}, rfp.ErrNotFound
 	}}
 
@@ -354,7 +389,7 @@ func TestGetRFPNotFound(t *testing.T) {
 }
 
 func TestGetRFPWrongTenantBehavesAsNotFound(t *testing.T) {
-	fake := &fakeRFPService{getFn: func(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+	fake := &fakeRFPService{getFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
 		return rfp.RFP{}, rfp.ErrNotFound
 	}}
 
@@ -367,7 +402,7 @@ func TestGetRFPWrongTenantBehavesAsNotFound(t *testing.T) {
 }
 
 func TestGetRFPByServiceRequestSuccess(t *testing.T) {
-	fake := &fakeRFPService{getBySRFn: func(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+	fake := &fakeRFPService{getBySRFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
 		return createdRFP(), nil
 	}}
 
@@ -390,10 +425,13 @@ func TestGetRFPByServiceRequestSuccess(t *testing.T) {
 	if fake.gotGetBySRServiceReq != uuid.MustParse("77777777-7777-7777-7777-777777777777") {
 		t.Errorf("GetRFPByServiceRequest() service request id = %v", fake.gotGetBySRServiceReq)
 	}
+	if fake.gotGetBySRRole != auth.RoleAdmin {
+		t.Errorf("GetRFPByServiceRequest() role = %q, want admin", fake.gotGetBySRRole)
+	}
 }
 
 func TestGetRFPByServiceRequestNotFound(t *testing.T) {
-	fake := &fakeRFPService{getBySRFn: func(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+	fake := &fakeRFPService{getBySRFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
 		return rfp.RFP{}, rfp.ErrNotFound
 	}}
 
@@ -406,7 +444,7 @@ func TestGetRFPByServiceRequestNotFound(t *testing.T) {
 }
 
 func TestGetRFPByServiceRequestWrongTenantBehavesAsNotFound(t *testing.T) {
-	fake := &fakeRFPService{getBySRFn: func(context.Context, uuid.UUID, uuid.UUID) (rfp.RFP, error) {
+	fake := &fakeRFPService{getBySRFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
 		return rfp.RFP{}, rfp.ErrNotFound
 	}}
 
@@ -419,7 +457,7 @@ func TestGetRFPByServiceRequestWrongTenantBehavesAsNotFound(t *testing.T) {
 }
 
 func TestTransitionRFPStatusSuccess(t *testing.T) {
-	fake := &fakeRFPService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, rfp.Status) (rfp.RFP, error) {
+	fake := &fakeRFPService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role, rfp.Status) (rfp.RFP, error) {
 		created := createdRFP()
 		created.Status = rfp.StatusPublished
 		return created, nil
@@ -447,10 +485,13 @@ func TestTransitionRFPStatusSuccess(t *testing.T) {
 	if fake.gotTransitionStatus != rfp.StatusPublished {
 		t.Errorf("TransitionRFP() status = %q, want published", fake.gotTransitionStatus)
 	}
+	if fake.gotTransitionRole != auth.RoleAdmin {
+		t.Errorf("TransitionRFP() role = %q, want admin", fake.gotTransitionRole)
+	}
 }
 
 func TestTransitionRFPStatusInvalidTransition(t *testing.T) {
-	fake := &fakeRFPService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, rfp.Status) (rfp.RFP, error) {
+	fake := &fakeRFPService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role, rfp.Status) (rfp.RFP, error) {
 		return rfp.RFP{}, rfp.ErrInvalidTransition
 	}}
 
@@ -466,7 +507,7 @@ func TestTransitionRFPStatusInvalidTransition(t *testing.T) {
 }
 
 func TestTransitionRFPStatusPublishPrecondition(t *testing.T) {
-	fake := &fakeRFPService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, rfp.Status) (rfp.RFP, error) {
+	fake := &fakeRFPService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role, rfp.Status) (rfp.RFP, error) {
 		return rfp.RFP{}, rfp.ErrPublishDueAtRequired
 	}}
 
@@ -479,7 +520,7 @@ func TestTransitionRFPStatusPublishPrecondition(t *testing.T) {
 }
 
 func TestTransitionRFPStatusNotFound(t *testing.T) {
-	fake := &fakeRFPService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, rfp.Status) (rfp.RFP, error) {
+	fake := &fakeRFPService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role, rfp.Status) (rfp.RFP, error) {
 		return rfp.RFP{}, rfp.ErrNotFound
 	}}
 
@@ -502,10 +543,10 @@ func TestTransitionRFPStatusInvalidPathID(t *testing.T) {
 	}
 }
 
-func TestTransitionRFPStatusMissingTenant(t *testing.T) {
+func TestTransitionRFPStatusWithoutSession(t *testing.T) {
 	fake := &fakeRFPService{}
 
-	rec := doRFPSvc(t, fake, http.MethodPatch, "/api/v1/rfps/66666666-6666-6666-6666-666666666666/status",
+	rec := doRFPSvcNoSession(t, fake, http.MethodPatch, "/api/v1/rfps/66666666-6666-6666-6666-666666666666/status",
 		`{"status":"published"}`)
 
 	if rec.Code != http.StatusUnauthorized {
@@ -525,7 +566,7 @@ func TestTransitionRFPStatusMalformedBody(t *testing.T) {
 }
 
 func TestTransitionRFPStatusInternalError(t *testing.T) {
-	fake := &fakeRFPService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, rfp.Status) (rfp.RFP, error) {
+	fake := &fakeRFPService{transitionFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role, rfp.Status) (rfp.RFP, error) {
 		return rfp.RFP{}, errors.New("connection reset")
 	}}
 
@@ -537,5 +578,170 @@ func TestTransitionRFPStatusInternalError(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "connection reset") {
 		t.Errorf("body leaks internal error: %q", rec.Body.String())
+	}
+}
+
+func TestRFPRequesterForbiddenAllEndpoints(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		target string
+		body   string
+		check  func(t *testing.T, fake *fakeRFPService)
+	}{
+		{
+			name:   "CreateRFP",
+			method: http.MethodPost,
+			target: "/api/v1/rfps",
+			body:   `{"service_request_id":"77777777-7777-7777-7777-777777777777","title":"MRI replacement","description":"Procure a replacement MRI scanner.","due_at":"2026-09-30T12:00:00Z"}`,
+			check: func(t *testing.T, fake *fakeRFPService) {
+				if fake.gotCreateRole != auth.RoleRequester {
+					t.Errorf("CreateRFP() role = %q, want requester", fake.gotCreateRole)
+				}
+			},
+		},
+		{
+			name:   "TransitionRFP",
+			method: http.MethodPatch,
+			target: "/api/v1/rfps/66666666-6666-6666-6666-666666666666/status",
+			body:   `{"status":"published"}`,
+			check: func(t *testing.T, fake *fakeRFPService) {
+				if fake.gotTransitionRole != auth.RoleRequester {
+					t.Errorf("TransitionRFP() role = %q, want requester", fake.gotTransitionRole)
+				}
+			},
+		},
+		{
+			name:   "GetRFP",
+			method: http.MethodGet,
+			target: "/api/v1/rfps/66666666-6666-6666-6666-666666666666",
+			check: func(t *testing.T, fake *fakeRFPService) {
+				if fake.gotGetRole != auth.RoleRequester {
+					t.Errorf("GetRFP() role = %q, want requester", fake.gotGetRole)
+				}
+			},
+		},
+		{
+			name:   "GetRFPByServiceRequest",
+			method: http.MethodGet,
+			target: "/api/v1/service-requests/77777777-7777-7777-7777-777777777777/rfp",
+			check: func(t *testing.T, fake *fakeRFPService) {
+				if fake.gotGetBySRRole != auth.RoleRequester {
+					t.Errorf("GetRFPByServiceRequest() role = %q, want requester", fake.gotGetBySRRole)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeRFPService{
+				createFn: func(context.Context, rfp.CreateParams, auth.Role) (rfp.RFP, error) {
+					return rfp.RFP{}, rfp.ErrForbidden
+				},
+				getFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
+					return rfp.RFP{}, rfp.ErrForbidden
+				},
+				getBySRFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
+					return rfp.RFP{}, rfp.ErrForbidden
+				},
+				transitionFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role, rfp.Status) (rfp.RFP, error) {
+					return rfp.RFP{}, rfp.ErrForbidden
+				},
+			}
+			rec := doRFPSvcWithAuth(t, fake, tc.method, tc.target, tc.body, authWithRole(auth.RoleRequester))
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+			}
+			if got := rec.Body.String(); got != `{"error":"forbidden"}`+"\n" {
+				t.Errorf("body = %q, want %q", got, `{"error":"forbidden"}`+"\n")
+			}
+			tc.check(t, fake)
+		})
+	}
+}
+
+func TestRFPBiomedicAllowedAllEndpoints(t *testing.T) {
+	fake := &fakeRFPService{
+		createFn: func(context.Context, rfp.CreateParams, auth.Role) (rfp.RFP, error) {
+			return createdRFP(), nil
+		},
+		getFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
+			return createdRFP(), nil
+		},
+		getBySRFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role) (rfp.RFP, error) {
+			return createdRFP(), nil
+		},
+		transitionFn: func(context.Context, uuid.UUID, uuid.UUID, auth.Role, rfp.Status) (rfp.RFP, error) {
+			return createdRFP(), nil
+		},
+	}
+
+	tests := []struct {
+		name   string
+		method string
+		target string
+		body   string
+		want   int
+		check  func(t *testing.T, fake *fakeRFPService)
+	}{
+		{
+			name:   "CreateRFP",
+			method: http.MethodPost,
+			target: "/api/v1/rfps",
+			body:   `{"service_request_id":"77777777-7777-7777-7777-777777777777","title":"MRI replacement","description":"Procure a replacement MRI scanner.","due_at":"2026-09-30T12:00:00Z"}`,
+			want:   http.StatusCreated,
+			check: func(t *testing.T, fake *fakeRFPService) {
+				if fake.gotCreateRole != auth.RoleBiomedic {
+					t.Errorf("CreateRFP() role = %q, want biomedic", fake.gotCreateRole)
+				}
+			},
+		},
+		{
+			name:   "TransitionRFP",
+			method: http.MethodPatch,
+			target: "/api/v1/rfps/66666666-6666-6666-6666-666666666666/status",
+			body:   `{"status":"published"}`,
+			want:   http.StatusOK,
+			check: func(t *testing.T, fake *fakeRFPService) {
+				if fake.gotTransitionRole != auth.RoleBiomedic {
+					t.Errorf("TransitionRFP() role = %q, want biomedic", fake.gotTransitionRole)
+				}
+			},
+		},
+		{
+			name:   "GetRFP",
+			method: http.MethodGet,
+			target: "/api/v1/rfps/66666666-6666-6666-6666-666666666666",
+			want:   http.StatusOK,
+			check: func(t *testing.T, fake *fakeRFPService) {
+				if fake.gotGetRole != auth.RoleBiomedic {
+					t.Errorf("GetRFP() role = %q, want biomedic", fake.gotGetRole)
+				}
+			},
+		},
+		{
+			name:   "GetRFPByServiceRequest",
+			method: http.MethodGet,
+			target: "/api/v1/service-requests/77777777-7777-7777-7777-777777777777/rfp",
+			want:   http.StatusOK,
+			check: func(t *testing.T, fake *fakeRFPService) {
+				if fake.gotGetBySRRole != auth.RoleBiomedic {
+					t.Errorf("GetRFPByServiceRequest() role = %q, want biomedic", fake.gotGetBySRRole)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doRFPSvcWithAuth(t, fake, tc.method, tc.target, tc.body, authWithRole(auth.RoleBiomedic))
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, tc.want, rec.Body.String())
+			}
+			tc.check(t, fake)
+		})
 	}
 }

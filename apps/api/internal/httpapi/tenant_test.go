@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/edwinpolo/biomed-cmms/api/internal/auth"
 	"github.com/edwinpolo/biomed-cmms/api/internal/equipment"
 	"github.com/edwinpolo/biomed-cmms/api/internal/servicerequest"
 	"github.com/edwinpolo/biomed-cmms/api/internal/tenant"
@@ -31,7 +32,7 @@ func (f *fakeTenantService) CreateTenant(ctx context.Context, params tenant.Crea
 
 func doRequest(t *testing.T, svc TenantService, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(svc, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{})
+	h := NewHandler(svc, testAuthService(), &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -44,26 +45,30 @@ func (s *stubRequestService) CreateRequest(context.Context, servicerequest.Creat
 	return servicerequest.ServiceRequest{}, errors.New("stubRequestService: CreateRequest not configured")
 }
 
-func (s *stubRequestService) TransitionRequest(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, servicerequest.Status) (servicerequest.ServiceRequest, error) {
+func (s *stubRequestService) TransitionRequest(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role, servicerequest.Status) (servicerequest.ServiceRequest, error) {
 	return servicerequest.ServiceRequest{}, errors.New("stubRequestService: TransitionRequest not configured")
 }
 
-func (s *stubRequestService) RequestHistory(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+func (s *stubRequestService) RequestHistory(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.RequestEvent, error) {
 	return nil, errors.New("stubRequestService: RequestHistory not configured")
 }
 
-func (s *stubRequestService) GetRequest(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+func (s *stubRequestService) GetRequest(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, auth.Role) (servicerequest.ServiceRequest, error) {
 	return servicerequest.ServiceRequest{}, errors.New("stubRequestService: GetRequest not configured")
 }
 
-func (s *stubRequestService) ListRequests(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+func (s *stubRequestService) ListRequests(context.Context, uuid.UUID, uuid.UUID, auth.Role) ([]servicerequest.ServiceRequest, error) {
 	return nil, errors.New("stubRequestService: ListRequests not configured")
 }
 
 type stubEquipmentService struct{}
 
-func (s *stubEquipmentService) ListEquipment(context.Context, uuid.UUID) ([]equipment.Equipment, error) {
+func (s *stubEquipmentService) ListEquipment(context.Context, uuid.UUID, auth.Role) ([]equipment.Equipment, error) {
 	return nil, errors.New("stubEquipmentService: ListEquipment not configured")
+}
+
+func (s *stubEquipmentService) ListSelectable(context.Context, uuid.UUID) ([]equipment.Equipment, error) {
+	return nil, errors.New("stubEquipmentService: ListSelectable not configured")
 }
 
 func TestCreateTenantSuccess(t *testing.T) {

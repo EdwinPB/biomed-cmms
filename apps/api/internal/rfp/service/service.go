@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/edwinpolo/biomed-cmms/api/internal/auth"
 	"github.com/edwinpolo/biomed-cmms/api/internal/rfp"
 )
 
@@ -31,8 +32,20 @@ func New(repo rfp.Repository) *Service {
 	return &Service{repo: repo}
 }
 
+// requireStaff rejects requesters before any validation or repository access.
+// Admin and biomedic callers pass through unchanged.
+func requireStaff(role auth.Role) error {
+	if role == auth.RoleRequester {
+		return rfp.ErrForbidden
+	}
+	return nil
+}
+
 // CreateRFP validates the request parameters and persists a new RFP.
-func (s *Service) CreateRFP(ctx context.Context, params rfp.CreateParams) (rfp.RFP, error) {
+func (s *Service) CreateRFP(ctx context.Context, params rfp.CreateParams, role auth.Role) (rfp.RFP, error) {
+	if err := requireStaff(role); err != nil {
+		return rfp.RFP{}, err
+	}
 	if err := validateCreate(params); err != nil {
 		return rfp.RFP{}, err
 	}
@@ -42,7 +55,11 @@ func (s *Service) CreateRFP(ctx context.Context, params rfp.CreateParams) (rfp.R
 // TransitionRFP loads the RFP tenant-scoped, validates the status change
 // (including publishing preconditions when the target is published), and
 // persists the new status.
-func (s *Service) TransitionRFP(ctx context.Context, tenantID, id uuid.UUID, to rfp.Status) (rfp.RFP, error) {
+func (s *Service) TransitionRFP(ctx context.Context, tenantID, id uuid.UUID, role auth.Role, to rfp.Status) (rfp.RFP, error) {
+	if err := requireStaff(role); err != nil {
+		return rfp.RFP{}, err
+	}
+
 	current, err := s.repo.GetByID(ctx, tenantID, id)
 	if err != nil {
 		return rfp.RFP{}, err
@@ -57,13 +74,19 @@ func (s *Service) TransitionRFP(ctx context.Context, tenantID, id uuid.UUID, to 
 }
 
 // GetRFP returns a single RFP, tenant-scoped.
-func (s *Service) GetRFP(ctx context.Context, tenantID, id uuid.UUID) (rfp.RFP, error) {
+func (s *Service) GetRFP(ctx context.Context, tenantID, id uuid.UUID, role auth.Role) (rfp.RFP, error) {
+	if err := requireStaff(role); err != nil {
+		return rfp.RFP{}, err
+	}
 	return s.repo.GetByID(ctx, tenantID, id)
 }
 
 // GetRFPByServiceRequest returns the current/latest RFP for a service request,
 // tenant-scoped.
-func (s *Service) GetRFPByServiceRequest(ctx context.Context, tenantID, serviceRequestID uuid.UUID) (rfp.RFP, error) {
+func (s *Service) GetRFPByServiceRequest(ctx context.Context, tenantID, serviceRequestID uuid.UUID, role auth.Role) (rfp.RFP, error) {
+	if err := requireStaff(role); err != nil {
+		return rfp.RFP{}, err
+	}
 	return s.repo.GetByServiceRequest(ctx, tenantID, serviceRequestID)
 }
 

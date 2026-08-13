@@ -21,8 +21,9 @@ const (
 )
 
 var (
-	ErrNotFound = errors.New("equipment: not found")
-	ErrConflict = errors.New("equipment: already exists")
+	ErrNotFound  = errors.New("equipment: not found")
+	ErrConflict  = errors.New("equipment: already exists")
+	ErrForbidden = errors.New("equipment: forbidden")
 )
 
 type Equipment struct {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/edwinpolo/biomed-cmms/api/internal/auth"
 	"github.com/edwinpolo/biomed-cmms/api/internal/servicerequest"
 )
 
@@ -42,13 +43,18 @@ func (s *Service) CreateRequest(ctx context.Context, params servicerequest.Creat
 
 // TransitionRequest loads the request tenant-scoped, validates the status
 // change against the domain transition rules, and persists the new status and
-// its audit event atomically.
+// its audit event atomically. Requesters are forbidden from changing status;
+// admin and biomedic callers transition freely.
 //
 // The atomic status update + event insert happens inside a single database
 // transaction owned by the repository (Repository.Transition); this service
 // never touches transactions.
-func (s *Service) TransitionRequest(ctx context.Context, tenantID, id, actorID uuid.UUID, to servicerequest.Status) (servicerequest.ServiceRequest, error) {
-	sr, err := s.repo.GetByID(ctx, tenantID, id)
+func (s *Service) TransitionRequest(ctx context.Context, tenantID, id, actorID uuid.UUID, role auth.Role, to servicerequest.Status) (servicerequest.ServiceRequest, error) {
+	if role == auth.RoleRequester {
+		return servicerequest.ServiceRequest{}, servicerequest.ErrForbidden
+	}
+
+	sr, err := s.repo.GetByID(ctx, tenantID, id, nil)
 	if err != nil {
 		return servicerequest.ServiceRequest{}, err
 	}
@@ -62,22 +68,35 @@ func (s *Service) TransitionRequest(ctx context.Context, tenantID, id, actorID u
 }
 
 // RequestHistory returns the audit trail for a request, oldest first. Tenant
-// scoping is delegated to the repository boundary; the read path adds no
-// business logic.
-func (s *Service) RequestHistory(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error) {
-	return s.repo.ListEvents(ctx, tenantID, requestID)
+// scoping is delegated to the repository boundary; requesters are additionally
+// scoped to requests they created.
+func (s *Service) RequestHistory(ctx context.Context, tenantID, requestID, userID uuid.UUID, role auth.Role) ([]servicerequest.RequestEvent, error) {
+	return s.repo.ListEvents(ctx, tenantID, requestID, creatorScope(userID, role))
 }
 
 // GetRequest returns a single request scoped to the tenant. Missing rows (or
-// rows owned by another tenant) surface as servicerequest.ErrNotFound.
-func (s *Service) GetRequest(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error) {
-	return s.repo.GetByID(ctx, tenantID, id)
+// rows owned by another tenant, or by another creator when the caller is a
+// requester) surface as servicerequest.ErrNotFound.
+func (s *Service) GetRequest(ctx context.Context, tenantID, id, userID uuid.UUID, role auth.Role) (servicerequest.ServiceRequest, error) {
+	return s.repo.GetByID(ctx, tenantID, id, creatorScope(userID, role))
 }
 
-// ListRequests returns the tenant's requests, newest first. The read path
-// adds no business logic; tenant scoping is delegated to the repository.
-func (s *Service) ListRequests(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error) {
-	return s.repo.ListByTenant(ctx, tenantID)
+// ListRequests returns the tenant's requests, newest first, scoped to the
+// authenticated user when they hold the requester role. Admin and biomedic
+// callers see every request in the tenant; tenant scoping is delegated to the
+// repository.
+func (s *Service) ListRequests(ctx context.Context, tenantID, userID uuid.UUID, role auth.Role) ([]servicerequest.ServiceRequest, error) {
+	return s.repo.ListByTenant(ctx, tenantID, creatorScope(userID, role))
+}
+
+// creatorScope returns a created-by filter for requester callers and nil for
+// admin/biomedic callers, who see the whole tenant.
+func creatorScope(userID uuid.UUID, role auth.Role) *uuid.UUID {
+	if role == auth.RoleRequester {
+		uid := userID
+		return &uid
+	}
+	return nil
 }
 
 func validateCreate(params servicerequest.CreateParams) error {

@@ -1,3 +1,29 @@
+export type UserRole = "admin" | "biomedic" | "requester";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  full_name: string;
+  role: UserRole;
+}
+
+export interface AuthTenant {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+export interface AuthSession {
+  user: AuthUser;
+  tenant: AuthTenant;
+}
+
+export interface LoginInput {
+  tenant_slug: string;
+  email: string;
+  password: string;
+}
+
 export type TenantStatus = "active" | "suspended" | "archived";
 
 export interface Tenant {
@@ -80,6 +106,18 @@ export interface Equipment {
 
 export interface EquipmentList {
   equipment: Equipment[];
+}
+
+export interface SelectableEquipment {
+  id: string;
+  asset_tag: string;
+  name: string;
+  location: string;
+  status: EquipmentStatus;
+}
+
+export interface SelectableEquipmentList {
+  equipment: SelectableEquipment[];
 }
 
 export type RfpStatus = "draft" | "published" | "closed" | "cancelled";

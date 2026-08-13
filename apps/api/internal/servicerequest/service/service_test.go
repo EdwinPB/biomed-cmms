@@ -7,21 +7,25 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/edwinpolo/biomed-cmms/api/internal/auth"
 	"github.com/edwinpolo/biomed-cmms/api/internal/servicerequest"
 )
 
 type fakeRepo struct {
 	createFn       func(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error)
-	getByIDFn      func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error)
+	getByIDFn      func(ctx context.Context, tenantID, id uuid.UUID, createdBy *uuid.UUID) (servicerequest.ServiceRequest, error)
 	transitionFn   func(ctx context.Context, event servicerequest.RequestEvent) (servicerequest.ServiceRequest, error)
-	listEventsFn   func(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error)
-	listByTenantFn func(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error)
+	listEventsFn   func(ctx context.Context, tenantID, requestID uuid.UUID, createdBy *uuid.UUID) ([]servicerequest.RequestEvent, error)
+	listByTenantFn func(ctx context.Context, tenantID uuid.UUID, createdBy *uuid.UUID) ([]servicerequest.ServiceRequest, error)
 
-	lastGetTenantID  uuid.UUID
-	lastTransition   servicerequest.RequestEvent
-	transitioned     []uuid.UUID
-	lastListTenantID uuid.UUID
-	lastListRequest  uuid.UUID
+	lastGetTenantID     uuid.UUID
+	lastGetCreatedBy    *uuid.UUID
+	lastTransition      servicerequest.RequestEvent
+	transitioned        []uuid.UUID
+	lastListTenantID    uuid.UUID
+	lastListCreatedBy   *uuid.UUID
+	lastListRequest     uuid.UUID
+	lastEventsCreatedBy *uuid.UUID
 }
 
 func (f *fakeRepo) Create(ctx context.Context, params servicerequest.CreateParams) (servicerequest.ServiceRequest, error) {
@@ -31,10 +35,11 @@ func (f *fakeRepo) Create(ctx context.Context, params servicerequest.CreateParam
 	return servicerequest.ServiceRequest{}, errors.New("fakeRepo: Create not configured")
 }
 
-func (f *fakeRepo) GetByID(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error) {
+func (f *fakeRepo) GetByID(ctx context.Context, tenantID, id uuid.UUID, createdBy *uuid.UUID) (servicerequest.ServiceRequest, error) {
 	f.lastGetTenantID = tenantID
+	f.lastGetCreatedBy = createdBy
 	if f.getByIDFn != nil {
-		return f.getByIDFn(ctx, tenantID, id)
+		return f.getByIDFn(ctx, tenantID, id, createdBy)
 	}
 	return servicerequest.ServiceRequest{}, errors.New("fakeRepo: GetByID not configured")
 }
@@ -48,19 +53,21 @@ func (f *fakeRepo) Transition(ctx context.Context, event servicerequest.RequestE
 	return servicerequest.ServiceRequest{}, errors.New("fakeRepo: Transition not configured")
 }
 
-func (f *fakeRepo) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+func (f *fakeRepo) ListByTenant(ctx context.Context, tenantID uuid.UUID, createdBy *uuid.UUID) ([]servicerequest.ServiceRequest, error) {
 	f.lastListTenantID = tenantID
+	f.lastListCreatedBy = createdBy
 	if f.listByTenantFn != nil {
-		return f.listByTenantFn(ctx, tenantID)
+		return f.listByTenantFn(ctx, tenantID, createdBy)
 	}
 	return nil, errors.New("fakeRepo: ListByTenant not configured")
 }
 
-func (f *fakeRepo) ListEvents(ctx context.Context, tenantID, requestID uuid.UUID) ([]servicerequest.RequestEvent, error) {
+func (f *fakeRepo) ListEvents(ctx context.Context, tenantID, requestID uuid.UUID, createdBy *uuid.UUID) ([]servicerequest.RequestEvent, error) {
 	f.lastListTenantID = tenantID
 	f.lastListRequest = requestID
+	f.lastEventsCreatedBy = createdBy
 	if f.listEventsFn != nil {
-		return f.listEventsFn(ctx, tenantID, requestID)
+		return f.listEventsFn(ctx, tenantID, requestID, createdBy)
 	}
 	return nil, errors.New("fakeRepo: ListEvents not configured")
 }
@@ -177,7 +184,7 @@ func TestTransitionRequestAllowed(t *testing.T) {
 			id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 			actorID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
 			fake := &fakeRepo{
-				getByIDFn: func(_ context.Context, _, _ uuid.UUID) (servicerequest.ServiceRequest, error) {
+				getByIDFn: func(_ context.Context, _, _ uuid.UUID, _ *uuid.UUID) (servicerequest.ServiceRequest, error) {
 					return testRequest(tenantID, id, tc.from), nil
 				},
 				transitionFn: func(_ context.Context, _ servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
@@ -186,7 +193,7 @@ func TestTransitionRequestAllowed(t *testing.T) {
 			}
 			svc := New(fake)
 
-			got, err := svc.TransitionRequest(context.Background(), tenantID, id, actorID, tc.to)
+			got, err := svc.TransitionRequest(context.Background(), tenantID, id, actorID, auth.RoleAdmin, tc.to)
 			if err != nil {
 				t.Fatalf("TransitionRequest() error = %v", err)
 			}
@@ -231,7 +238,7 @@ func TestTransitionRequestInvalidRejected(t *testing.T) {
 			tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 			id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 			fake := &fakeRepo{
-				getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+				getByIDFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (servicerequest.ServiceRequest, error) {
 					return testRequest(tenantID, id, tc.from), nil
 				},
 				transitionFn: func(context.Context, servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
@@ -240,7 +247,7 @@ func TestTransitionRequestInvalidRejected(t *testing.T) {
 			}
 			svc := New(fake)
 
-			_, err := svc.TransitionRequest(context.Background(), tenantID, id, uuid.MustParse("33333333-3333-3333-3333-333333333333"), tc.to)
+			_, err := svc.TransitionRequest(context.Background(), tenantID, id, uuid.MustParse("33333333-3333-3333-3333-333333333333"), auth.RoleAdmin, tc.to)
 			if !errors.Is(err, servicerequest.ErrInvalidTransition) {
 				t.Fatalf("TransitionRequest() error = %v, want ErrInvalidTransition", err)
 			}
@@ -252,7 +259,7 @@ func TestTransitionRequestInvalidRejected(t *testing.T) {
 }
 
 func TestTransitionRequestNotFoundPropagated(t *testing.T) {
-	fake := &fakeRepo{getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRepo{getByIDFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
 	}}
 	svc := New(fake)
@@ -261,6 +268,7 @@ func TestTransitionRequestNotFoundPropagated(t *testing.T) {
 		uuid.MustParse("11111111-1111-1111-1111-111111111111"),
 		uuid.MustParse("22222222-2222-2222-2222-222222222222"),
 		uuid.MustParse("33333333-3333-3333-3333-333333333333"),
+		auth.RoleAdmin,
 		servicerequest.StatusAssigned)
 	if !errors.Is(err, servicerequest.ErrNotFound) {
 		t.Errorf("TransitionRequest() error = %v, want ErrNotFound", err)
@@ -269,7 +277,7 @@ func TestTransitionRequestNotFoundPropagated(t *testing.T) {
 
 func TestTransitionRequestGetErrorPropagated(t *testing.T) {
 	wantErr := errors.New("connection reset")
-	fake := &fakeRepo{getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRepo{getByIDFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, wantErr
 	}}
 	svc := New(fake)
@@ -278,6 +286,7 @@ func TestTransitionRequestGetErrorPropagated(t *testing.T) {
 		uuid.MustParse("11111111-1111-1111-1111-111111111111"),
 		uuid.MustParse("22222222-2222-2222-2222-222222222222"),
 		uuid.MustParse("33333333-3333-3333-3333-333333333333"),
+		auth.RoleAdmin,
 		servicerequest.StatusAssigned)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("TransitionRequest() error = %v, want %v", err, wantErr)
@@ -289,7 +298,7 @@ func TestTransitionRequestTransitionErrorPropagated(t *testing.T) {
 	id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 	wantErr := errors.New("connection reset")
 	fake := &fakeRepo{
-		getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+		getByIDFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (servicerequest.ServiceRequest, error) {
 			return testRequest(tenantID, id, servicerequest.StatusPending), nil
 		},
 		transitionFn: func(context.Context, servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
@@ -299,7 +308,7 @@ func TestTransitionRequestTransitionErrorPropagated(t *testing.T) {
 	svc := New(fake)
 
 	_, err := svc.TransitionRequest(context.Background(), tenantID, id,
-		uuid.MustParse("33333333-3333-3333-3333-333333333333"), servicerequest.StatusAssigned)
+		uuid.MustParse("33333333-3333-3333-3333-333333333333"), auth.RoleAdmin, servicerequest.StatusAssigned)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("TransitionRequest() error = %v, want %v", err, wantErr)
 	}
@@ -310,7 +319,7 @@ func TestTransitionRequestTenantAndActorPassedToRepository(t *testing.T) {
 	id := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 	actorID := uuid.MustParse("44444444-4444-4444-4444-444444444444")
 	fake := &fakeRepo{
-		getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+		getByIDFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (servicerequest.ServiceRequest, error) {
 			return testRequest(tenantID, id, servicerequest.StatusPending), nil
 		},
 		transitionFn: func(_ context.Context, _ servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
@@ -319,7 +328,7 @@ func TestTransitionRequestTenantAndActorPassedToRepository(t *testing.T) {
 	}
 	svc := New(fake)
 
-	if _, err := svc.TransitionRequest(context.Background(), tenantID, id, actorID, servicerequest.StatusAssigned); err != nil {
+	if _, err := svc.TransitionRequest(context.Background(), tenantID, id, actorID, auth.RoleAdmin, servicerequest.StatusAssigned); err != nil {
 		t.Fatalf("TransitionRequest() error = %v", err)
 	}
 	if fake.lastGetTenantID != tenantID {
@@ -337,12 +346,12 @@ func TestRequestHistoryForwardsTenantAndRequestID(t *testing.T) {
 	tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	requestID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 	want := []servicerequest.RequestEvent{{ID: uuid.MustParse("33333333-3333-3333-3333-333333333333")}}
-	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) ([]servicerequest.RequestEvent, error) {
 		return want, nil
 	}}
 	svc := New(fake)
 
-	got, err := svc.RequestHistory(context.Background(), tenantID, requestID)
+	got, err := svc.RequestHistory(context.Background(), tenantID, requestID, uuid.MustParse("33333333-3333-3333-3333-333333333333"), auth.RoleAdmin)
 	if err != nil {
 		t.Fatalf("RequestHistory() error = %v", err)
 	}
@@ -358,12 +367,12 @@ func TestRequestHistoryForwardsTenantAndRequestID(t *testing.T) {
 }
 
 func TestRequestHistoryForwardsEmptySlice(t *testing.T) {
-	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) ([]servicerequest.RequestEvent, error) {
 		return []servicerequest.RequestEvent{}, nil
 	}}
 	svc := New(fake)
 
-	got, err := svc.RequestHistory(context.Background(), uuid.New(), uuid.New())
+	got, err := svc.RequestHistory(context.Background(), uuid.New(), uuid.New(), uuid.New(), auth.RoleAdmin)
 	if err != nil {
 		t.Fatalf("RequestHistory() error = %v", err)
 	}
@@ -376,12 +385,12 @@ func TestRequestHistoryForwardsEmptySlice(t *testing.T) {
 }
 
 func TestRequestHistoryNotFoundPropagated(t *testing.T) {
-	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) ([]servicerequest.RequestEvent, error) {
 		return nil, servicerequest.ErrNotFound
 	}}
 	svc := New(fake)
 
-	_, err := svc.RequestHistory(context.Background(), uuid.New(), uuid.New())
+	_, err := svc.RequestHistory(context.Background(), uuid.New(), uuid.New(), uuid.New(), auth.RoleAdmin)
 	if !errors.Is(err, servicerequest.ErrNotFound) {
 		t.Errorf("RequestHistory() error = %v, want ErrNotFound", err)
 	}
@@ -389,12 +398,12 @@ func TestRequestHistoryNotFoundPropagated(t *testing.T) {
 
 func TestRequestHistoryRepoErrorPropagated(t *testing.T) {
 	wantErr := errors.New("connection reset")
-	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID) ([]servicerequest.RequestEvent, error) {
+	fake := &fakeRepo{listEventsFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) ([]servicerequest.RequestEvent, error) {
 		return nil, wantErr
 	}}
 	svc := New(fake)
 
-	_, err := svc.RequestHistory(context.Background(), uuid.New(), uuid.New())
+	_, err := svc.RequestHistory(context.Background(), uuid.New(), uuid.New(), uuid.New(), auth.RoleAdmin)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("RequestHistory() error = %v, want %v", err, wantErr)
 	}
@@ -404,12 +413,12 @@ func TestGetRequestForwardsTenantAndID(t *testing.T) {
 	tenantID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	requestID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 	want := testRequest(tenantID, requestID, servicerequest.StatusAssigned)
-	fake := &fakeRepo{getByIDFn: func(ctx context.Context, tenantID, id uuid.UUID) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRepo{getByIDFn: func(ctx context.Context, tenantID, id uuid.UUID, _ *uuid.UUID) (servicerequest.ServiceRequest, error) {
 		return want, nil
 	}}
 	svc := New(fake)
 
-	got, err := svc.GetRequest(context.Background(), tenantID, requestID)
+	got, err := svc.GetRequest(context.Background(), tenantID, requestID, uuid.MustParse("33333333-3333-3333-3333-333333333333"), auth.RoleAdmin)
 	if err != nil {
 		t.Fatalf("GetRequest() error = %v", err)
 	}
@@ -422,12 +431,12 @@ func TestGetRequestForwardsTenantAndID(t *testing.T) {
 }
 
 func TestGetRequestNotFoundPropagated(t *testing.T) {
-	fake := &fakeRepo{getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (servicerequest.ServiceRequest, error) {
+	fake := &fakeRepo{getByIDFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (servicerequest.ServiceRequest, error) {
 		return servicerequest.ServiceRequest{}, servicerequest.ErrNotFound
 	}}
 	svc := New(fake)
 
-	_, err := svc.GetRequest(context.Background(), uuid.New(), uuid.New())
+	_, err := svc.GetRequest(context.Background(), uuid.New(), uuid.New(), uuid.New(), auth.RoleAdmin)
 	if !errors.Is(err, servicerequest.ErrNotFound) {
 		t.Errorf("GetRequest() error = %v, want ErrNotFound", err)
 	}
@@ -439,12 +448,12 @@ func TestListRequestsForwardsTenant(t *testing.T) {
 		testRequest(tenantID, uuid.MustParse("22222222-2222-2222-2222-222222222222"), servicerequest.StatusPending),
 		testRequest(tenantID, uuid.MustParse("33333333-3333-3333-3333-333333333333"), servicerequest.StatusResolved),
 	}
-	fake := &fakeRepo{listByTenantFn: func(_ context.Context, tenantID uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	fake := &fakeRepo{listByTenantFn: func(_ context.Context, tenantID uuid.UUID, _ *uuid.UUID) ([]servicerequest.ServiceRequest, error) {
 		return want, nil
 	}}
 	svc := New(fake)
 
-	got, err := svc.ListRequests(context.Background(), tenantID)
+	got, err := svc.ListRequests(context.Background(), tenantID, uuid.New(), auth.RoleAdmin)
 	if err != nil {
 		t.Fatalf("ListRequests() error = %v", err)
 	}
@@ -457,12 +466,12 @@ func TestListRequestsForwardsTenant(t *testing.T) {
 }
 
 func TestListRequestsForwardsEmptySlice(t *testing.T) {
-	fake := &fakeRepo{listByTenantFn: func(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	fake := &fakeRepo{listByTenantFn: func(context.Context, uuid.UUID, *uuid.UUID) ([]servicerequest.ServiceRequest, error) {
 		return []servicerequest.ServiceRequest{}, nil
 	}}
 	svc := New(fake)
 
-	got, err := svc.ListRequests(context.Background(), uuid.New())
+	got, err := svc.ListRequests(context.Background(), uuid.New(), uuid.New(), auth.RoleAdmin)
 	if err != nil {
 		t.Fatalf("ListRequests() error = %v", err)
 	}
@@ -476,13 +485,189 @@ func TestListRequestsForwardsEmptySlice(t *testing.T) {
 
 func TestListRequestsRepoErrorPropagated(t *testing.T) {
 	wantErr := errors.New("connection reset")
-	fake := &fakeRepo{listByTenantFn: func(context.Context, uuid.UUID) ([]servicerequest.ServiceRequest, error) {
+	fake := &fakeRepo{listByTenantFn: func(context.Context, uuid.UUID, *uuid.UUID) ([]servicerequest.ServiceRequest, error) {
 		return nil, wantErr
 	}}
 	svc := New(fake)
 
-	_, err := svc.ListRequests(context.Background(), uuid.New())
+	_, err := svc.ListRequests(context.Background(), uuid.New(), uuid.New(), auth.RoleAdmin)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("ListRequests() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestListRequestsRequesterScopesToUser(t *testing.T) {
+	tenantID := uuid.New()
+	userID := uuid.New()
+	fake := &fakeRepo{}
+	svc := New(fake)
+
+	if _, err := svc.ListRequests(context.Background(), tenantID, userID, auth.RoleRequester); err == nil {
+		t.Fatal("ListRequests() error = nil, want fake not configured error")
+	}
+	if fake.lastListCreatedBy == nil || *fake.lastListCreatedBy != userID {
+		t.Errorf("ListByTenant() createdBy = %v, want %v", fake.lastListCreatedBy, userID)
+	}
+}
+
+func TestListRequestsAdminUnfiltered(t *testing.T) {
+	tenantID := uuid.New()
+	userID := uuid.New()
+	fake := &fakeRepo{}
+	svc := New(fake)
+
+	svc.ListRequests(context.Background(), tenantID, userID, auth.RoleAdmin)
+	if fake.lastListCreatedBy != nil {
+		t.Errorf("ListByTenant() createdBy = %v, want nil for admin", fake.lastListCreatedBy)
+	}
+}
+
+func TestListRequestsBiomedicUnfiltered(t *testing.T) {
+	tenantID := uuid.New()
+	userID := uuid.New()
+	fake := &fakeRepo{}
+	svc := New(fake)
+
+	svc.ListRequests(context.Background(), tenantID, userID, auth.RoleBiomedic)
+	if fake.lastListCreatedBy != nil {
+		t.Errorf("ListByTenant() createdBy = %v, want nil for biomedic", fake.lastListCreatedBy)
+	}
+}
+
+func TestGetRequestRequesterScopesToUser(t *testing.T) {
+	tenantID := uuid.New()
+	id := uuid.New()
+	userID := uuid.New()
+	fake := &fakeRepo{}
+	svc := New(fake)
+
+	svc.GetRequest(context.Background(), tenantID, id, userID, auth.RoleRequester)
+	if fake.lastGetCreatedBy == nil || *fake.lastGetCreatedBy != userID {
+		t.Errorf("GetByID() createdBy = %v, want %v", fake.lastGetCreatedBy, userID)
+	}
+}
+
+func TestGetRequestAdminUnfiltered(t *testing.T) {
+	tenantID := uuid.New()
+	id := uuid.New()
+	userID := uuid.New()
+	fake := &fakeRepo{}
+	svc := New(fake)
+
+	svc.GetRequest(context.Background(), tenantID, id, userID, auth.RoleAdmin)
+	if fake.lastGetCreatedBy != nil {
+		t.Errorf("GetByID() createdBy = %v, want nil for admin", fake.lastGetCreatedBy)
+	}
+}
+
+func TestGetRequestBiomedicUnfiltered(t *testing.T) {
+	tenantID := uuid.New()
+	id := uuid.New()
+	userID := uuid.New()
+	fake := &fakeRepo{}
+	svc := New(fake)
+
+	svc.GetRequest(context.Background(), tenantID, id, userID, auth.RoleBiomedic)
+	if fake.lastGetCreatedBy != nil {
+		t.Errorf("GetByID() createdBy = %v, want nil for biomedic", fake.lastGetCreatedBy)
+	}
+}
+
+func TestRequestHistoryRequesterScopesToUser(t *testing.T) {
+	tenantID := uuid.New()
+	requestID := uuid.New()
+	userID := uuid.New()
+	fake := &fakeRepo{}
+	svc := New(fake)
+
+	svc.RequestHistory(context.Background(), tenantID, requestID, userID, auth.RoleRequester)
+	if fake.lastEventsCreatedBy == nil || *fake.lastEventsCreatedBy != userID {
+		t.Errorf("ListEvents() createdBy = %v, want %v", fake.lastEventsCreatedBy, userID)
+	}
+}
+
+func TestRequestHistoryAdminUnfiltered(t *testing.T) {
+	tenantID := uuid.New()
+	requestID := uuid.New()
+	userID := uuid.New()
+	fake := &fakeRepo{}
+	svc := New(fake)
+
+	svc.RequestHistory(context.Background(), tenantID, requestID, userID, auth.RoleAdmin)
+	if fake.lastEventsCreatedBy != nil {
+		t.Errorf("ListEvents() createdBy = %v, want nil for admin", fake.lastEventsCreatedBy)
+	}
+}
+
+func TestTransitionRequestGetByIDUnscoped(t *testing.T) {
+	tenantID := uuid.New()
+	id := uuid.New()
+	fake := &fakeRepo{
+		getByIDFn: func(_ context.Context, _, _ uuid.UUID, _ *uuid.UUID) (servicerequest.ServiceRequest, error) {
+			return testRequest(tenantID, id, servicerequest.StatusPending), nil
+		},
+		transitionFn: func(_ context.Context, _ servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
+			return testRequest(tenantID, id, servicerequest.StatusAssigned), nil
+		},
+	}
+	svc := New(fake)
+
+	if _, err := svc.TransitionRequest(context.Background(), tenantID, id, uuid.New(), auth.RoleAdmin, servicerequest.StatusAssigned); err != nil {
+		t.Fatalf("TransitionRequest() error = %v", err)
+	}
+	if fake.lastGetCreatedBy != nil {
+		t.Errorf("GetByID() createdBy = %v, want nil (transition must not be creator-scoped)", fake.lastGetCreatedBy)
+	}
+}
+
+func TestTransitionRequestRequesterForbidden(t *testing.T) {
+	tenantID := uuid.New()
+	id := uuid.New()
+	fake := &fakeRepo{
+		getByIDFn: func(_ context.Context, _, _ uuid.UUID, _ *uuid.UUID) (servicerequest.ServiceRequest, error) {
+			t.Fatal("GetByID() must not be called for requester")
+			return servicerequest.ServiceRequest{}, nil
+		},
+	}
+	svc := New(fake)
+
+	_, err := svc.TransitionRequest(context.Background(), tenantID, id, uuid.New(), auth.RoleRequester, servicerequest.StatusAssigned)
+	if !errors.Is(err, servicerequest.ErrForbidden) {
+		t.Fatalf("TransitionRequest() error = %v, want ErrForbidden", err)
+	}
+	if len(fake.transitioned) != 0 {
+		t.Errorf("Transition() called %d times, want 0", len(fake.transitioned))
+	}
+	if fake.lastGetTenantID != uuid.Nil {
+		t.Errorf("GetByID() called with tenant %v, want no call", fake.lastGetTenantID)
+	}
+}
+
+func TestTransitionRequestAdminAndBiomedicAllowed(t *testing.T) {
+	for _, role := range []auth.Role{auth.RoleAdmin, auth.RoleBiomedic} {
+		t.Run(string(role), func(t *testing.T) {
+			tenantID := uuid.New()
+			id := uuid.New()
+			fake := &fakeRepo{
+				getByIDFn: func(_ context.Context, _, _ uuid.UUID, _ *uuid.UUID) (servicerequest.ServiceRequest, error) {
+					return testRequest(tenantID, id, servicerequest.StatusPending), nil
+				},
+				transitionFn: func(_ context.Context, _ servicerequest.RequestEvent) (servicerequest.ServiceRequest, error) {
+					return testRequest(tenantID, id, servicerequest.StatusAssigned), nil
+				},
+			}
+			svc := New(fake)
+
+			got, err := svc.TransitionRequest(context.Background(), tenantID, id, uuid.New(), role, servicerequest.StatusAssigned)
+			if err != nil {
+				t.Fatalf("TransitionRequest() error = %v, want nil", err)
+			}
+			if got.Status != servicerequest.StatusAssigned {
+				t.Errorf("status = %q, want %q", got.Status, servicerequest.StatusAssigned)
+			}
+			if len(fake.transitioned) != 1 {
+				t.Errorf("Transition() called %d times, want 1", len(fake.transitioned))
+			}
+		})
 	}
 }

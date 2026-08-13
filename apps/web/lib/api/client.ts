@@ -10,8 +10,6 @@ export class ApiError extends Error {
 
 export interface ApiClientConfig {
   baseUrl?: string;
-  tenantId?: string;
-  userId?: string;
 }
 
 interface ErrorPayload {
@@ -44,22 +42,18 @@ export function createApiClient(config: ApiClientConfig = {}) {
   const baseUrl = normalizeBaseUrl(
     config.baseUrl ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080",
   );
-  const tenantId = config.tenantId ?? process.env.NEXT_PUBLIC_TENANT_ID ?? "";
-  const userId = config.userId ?? process.env.NEXT_PUBLIC_USER_ID ?? "";
 
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     if (init.body && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
-    if (tenantId) {
-      headers.set("X-Tenant-ID", tenantId);
-    }
-    if (userId) {
-      headers.set("X-User-ID", userId);
-    }
 
-    const res = await fetch(`${baseUrl}${path}`, { ...init, headers });
+    const res = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers,
+      credentials: "include",
+    });
     if (!res.ok) {
       throw await toApiError(res);
     }

@@ -25,8 +25,9 @@ const (
 )
 
 var (
-	ErrNotFound = errors.New("rfp: not found")
-	ErrConflict = errors.New("rfp: conflict")
+	ErrNotFound  = errors.New("rfp: not found")
+	ErrConflict  = errors.New("rfp: conflict")
+	ErrForbidden = errors.New("rfp: forbidden")
 )
 
 type RFP struct {

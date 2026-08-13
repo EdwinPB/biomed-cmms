@@ -60,7 +60,7 @@ func createEquipment(t *testing.T, pool *pgxpool.Pool, tenantID uuid.UUID) uuid.
 
 func truncateTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), `TRUNCATE request_events, rfps, service_requests, equipment, users, tenants`); err != nil {
+	if _, err := pool.Exec(context.Background(), `TRUNCATE auth_sessions, request_events, rfps, service_requests, equipment, users, tenants`); err != nil {
 		t.Fatalf("truncate tables: %v", err)
 	}
 }
@@ -147,7 +147,7 @@ func TestGetByID(t *testing.T) {
 
 	created := createRequest(t, repo, pool, tenantID)
 
-	got, err := repo.GetByID(context.Background(), tenantID, created.ID)
+	got, err := repo.GetByID(context.Background(), tenantID, created.ID, nil)
 	if err != nil {
 		t.Fatalf("GetByID() error = %v", err)
 	}
@@ -372,7 +372,7 @@ func TestGetByIDNotFound(t *testing.T) {
 	truncateTables(t, pool)
 	tenantID := createTenant(t, pool)
 
-	_, err := repo.GetByID(context.Background(), tenantID, uuid.MustParse("00000000-0000-0000-0000-000000000001"))
+	_, err := repo.GetByID(context.Background(), tenantID, uuid.MustParse("00000000-0000-0000-0000-000000000001"), nil)
 	if !errors.Is(err, servicerequest.ErrNotFound) {
 		t.Errorf("GetByID() error = %v, want servicerequest.ErrNotFound", err)
 	}
@@ -386,7 +386,7 @@ func TestGetByIDWrongTenant(t *testing.T) {
 
 	created := createRequest(t, repo, pool, tenantA)
 
-	_, err := repo.GetByID(context.Background(), tenantB, created.ID)
+	_, err := repo.GetByID(context.Background(), tenantB, created.ID, nil)
 	if err != servicerequest.ErrNotFound {
 		t.Errorf("GetByID() across tenants error = %v, want ErrNotFound", err)
 	}
@@ -403,7 +403,7 @@ func TestListByTenant(t *testing.T) {
 	}
 	createRequest(t, repo, pool, tenantB)
 
-	list, err := repo.ListByTenant(context.Background(), tenantA)
+	list, err := repo.ListByTenant(context.Background(), tenantA, nil)
 	if err != nil {
 		t.Fatalf("ListByTenant() error = %v", err)
 	}
@@ -422,7 +422,7 @@ func TestListByTenantEmpty(t *testing.T) {
 	truncateTables(t, pool)
 	tenantID := createTenant(t, pool)
 
-	list, err := repo.ListByTenant(context.Background(), tenantID)
+	list, err := repo.ListByTenant(context.Background(), tenantID, nil)
 	if err != nil {
 		t.Fatalf("ListByTenant() error = %v", err)
 	}
@@ -557,7 +557,7 @@ func TestListEventsChronologicalOrder(t *testing.T) {
 	repo.Transition(ctx, servicerequest.RequestEvent{TenantID: tenantID, RequestID: sr.ID, ActorID: actorID, FromStatus: servicerequest.StatusPending, ToStatus: servicerequest.StatusAssigned})
 	repo.Transition(ctx, servicerequest.RequestEvent{TenantID: tenantID, RequestID: sr.ID, ActorID: actorID, FromStatus: servicerequest.StatusAssigned, ToStatus: servicerequest.StatusInProgress})
 
-	events, err := repo.ListEvents(ctx, tenantID, sr.ID)
+	events, err := repo.ListEvents(ctx, tenantID, sr.ID, nil)
 	if err != nil {
 		t.Fatalf("ListEvents() error = %v", err)
 	}
@@ -600,7 +600,7 @@ func TestListEventsTiebreakByID(t *testing.T) {
 		}
 	}
 
-	events, err := repo.ListEvents(ctx, tenantID, sr.ID)
+	events, err := repo.ListEvents(ctx, tenantID, sr.ID, nil)
 	if err != nil {
 		t.Fatalf("ListEvents() error = %v", err)
 	}
@@ -620,7 +620,7 @@ func TestListEventsEmptyReturnsNonNil(t *testing.T) {
 
 	sr := createRequest(t, repo, pool, tenantID)
 
-	events, err := repo.ListEvents(ctx, tenantID, sr.ID)
+	events, err := repo.ListEvents(ctx, tenantID, sr.ID, nil)
 	if err != nil {
 		t.Fatalf("ListEvents() error = %v", err)
 	}
@@ -645,7 +645,7 @@ func TestListEventsWrongTenant(t *testing.T) {
 		t.Fatalf("Transition() error = %v", err)
 	}
 
-	_, err := repo.ListEvents(ctx, tenantB, sr.ID)
+	_, err := repo.ListEvents(ctx, tenantB, sr.ID, nil)
 	if !errors.Is(err, servicerequest.ErrNotFound) {
 		t.Errorf("ListEvents() across tenants error = %v, want ErrNotFound", err)
 	}
@@ -656,8 +656,121 @@ func TestListEventsUnknownRequest(t *testing.T) {
 	truncateTables(t, pool)
 	tenantID := createTenant(t, pool)
 
-	_, err := repo.ListEvents(context.Background(), tenantID, uuid.MustParse("00000000-0000-0000-0000-000000000001"))
+	_, err := repo.ListEvents(context.Background(), tenantID, uuid.MustParse("00000000-0000-0000-0000-000000000001"), nil)
 	if !errors.Is(err, servicerequest.ErrNotFound) {
 		t.Errorf("ListEvents() unknown request error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestGetByIDCreatedByFilter(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	owner := createUser(t, pool, tenantID)
+	sr := createRequest(t, repo, pool, tenantID, func(p *servicerequest.CreateParams) {
+		p.CreatedBy = owner
+	})
+
+	got, err := repo.GetByID(ctx, tenantID, sr.ID, &owner)
+	if err != nil {
+		t.Fatalf("GetByID() own request error = %v", err)
+	}
+	if got.ID != sr.ID {
+		t.Errorf("GetByID() id = %v, want %v", got.ID, sr.ID)
+	}
+
+	other := createUser(t, pool, tenantID)
+	if _, err := repo.GetByID(ctx, tenantID, sr.ID, &other); !errors.Is(err, servicerequest.ErrNotFound) {
+		t.Errorf("GetByID() other creator error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestGetByIDNilCreatorUnfiltered(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	sr := createRequest(t, repo, pool, tenantID)
+
+	got, err := repo.GetByID(ctx, tenantID, sr.ID, nil)
+	if err != nil {
+		t.Fatalf("GetByID() unfiltered error = %v", err)
+	}
+	if got.ID != sr.ID {
+		t.Errorf("GetByID() id = %v, want %v", got.ID, sr.ID)
+	}
+}
+
+func TestListByTenantCreatedByFilter(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	userA := createUser(t, pool, tenantID)
+	userB := createUser(t, pool, tenantID)
+
+	srA := createRequest(t, repo, pool, tenantID, func(p *servicerequest.CreateParams) {
+		p.CreatedBy = userA
+	})
+	createRequest(t, repo, pool, tenantID, func(p *servicerequest.CreateParams) {
+		p.CreatedBy = userB
+	})
+
+	list, err := repo.ListByTenant(ctx, tenantID, &userA)
+	if err != nil {
+		t.Fatalf("ListByTenant() error = %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("ListByTenant() returned %d items, want 1", len(list))
+	}
+	if list[0].ID != srA.ID {
+		t.Errorf("ListByTenant() id = %v, want %v", list[0].ID, srA.ID)
+	}
+	if list[0].CreatedBy != userA {
+		t.Errorf("ListByTenant() created_by = %v, want %v", list[0].CreatedBy, userA)
+	}
+}
+
+func TestListEventsCreatedByFilter(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	truncateTables(t, pool)
+	ctx := context.Background()
+	tenantID := createTenant(t, pool)
+
+	owner := createUser(t, pool, tenantID)
+	sr := createRequest(t, repo, pool, tenantID, func(p *servicerequest.CreateParams) {
+		p.CreatedBy = owner
+	})
+	actorID := createUser(t, pool, tenantID)
+	if _, err := repo.Transition(ctx, servicerequest.RequestEvent{
+		TenantID: tenantID, RequestID: sr.ID, ActorID: actorID,
+		FromStatus: servicerequest.StatusPending, ToStatus: servicerequest.StatusAssigned,
+	}); err != nil {
+		t.Fatalf("Transition() error = %v", err)
+	}
+
+	events, err := repo.ListEvents(ctx, tenantID, sr.ID, &owner)
+	if err != nil {
+		t.Fatalf("ListEvents() own request error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("ListEvents() returned %d events, want 1", len(events))
+	}
+
+	other := createUser(t, pool, tenantID)
+	if _, err := repo.ListEvents(ctx, tenantID, sr.ID, &other); !errors.Is(err, servicerequest.ErrNotFound) {
+		t.Errorf("ListEvents() other creator error = %v, want ErrNotFound", err)
+	}
+
+	events, err = repo.ListEvents(ctx, tenantID, sr.ID, nil)
+	if err != nil {
+		t.Fatalf("ListEvents() unfiltered error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("ListEvents() unfiltered returned %d events, want 1", len(events))
 	}
 }

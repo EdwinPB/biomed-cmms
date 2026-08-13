@@ -1,5 +1,5 @@
-import { Card } from "../../components/Card";
-import { PageHeader } from "../../components/PageHeader";
+import { Card } from "../../../components/Card";
+import { PageHeader } from "../../../components/PageHeader";
 
 export default function EquipmentPage() {
   return (

@@ -3,8 +3,9 @@ package httpapi
 import "net/http"
 
 const (
-	corsAllowMethods = "GET, POST, PATCH, OPTIONS"
-	corsAllowHeaders = "Content-Type, X-Tenant-ID, X-User-ID"
+	corsAllowMethods     = "GET, POST, PATCH, OPTIONS"
+	corsAllowHeaders     = "Content-Type"
+	corsAllowCredentials = "true"
 )
 
 // CORS returns middleware that applies single-origin CORS configuration to the
@@ -21,6 +22,7 @@ func CORS(allowedOrigin string) func(http.Handler) http.Handler {
 			if origin != "" && origin == allowedOrigin {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Add("Vary", "Origin")
+				w.Header().Set("Access-Control-Allow-Credentials", corsAllowCredentials)
 			}
 
 			if r.Method == http.MethodOptions {

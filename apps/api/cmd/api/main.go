@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	authpostgres "github.com/edwinpolo/biomed-cmms/api/internal/auth/postgres"
+	authservice "github.com/edwinpolo/biomed-cmms/api/internal/auth/service"
 	"github.com/edwinpolo/biomed-cmms/api/internal/config"
 	"github.com/edwinpolo/biomed-cmms/api/internal/database"
 	equipmentpostgres "github.com/edwinpolo/biomed-cmms/api/internal/equipment/postgres"
@@ -52,9 +54,12 @@ func main() {
 	equipmentRepo := equipmentpostgres.NewRepository(pool)
 	equipmentSvc := equipmentservice.New(equipmentRepo)
 
+	authRepo := authpostgres.NewRepository(pool)
+	authSvc := authservice.New(authRepo, cfg.SessionTTL)
+
 	server := &http.Server{
 		Addr:              ":" + cfg.APIPort,
-		Handler:           httpapi.CORS(cfg.CORSAllowedOrigin)(httpapi.NewHandler(tenants, serviceRequests, rfps, equipmentSvc)),
+		Handler:           httpapi.CORS(cfg.CORSAllowedOrigin)(httpapi.NewHandler(tenants, authSvc, serviceRequests, rfps, equipmentSvc, cfg.SessionCookieName)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
