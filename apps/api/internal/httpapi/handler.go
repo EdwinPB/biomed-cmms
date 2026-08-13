@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -15,6 +16,12 @@ import (
 	"github.com/edwinpolo/biomed-cmms/api/internal/servicerequest"
 	"github.com/edwinpolo/biomed-cmms/api/internal/tenant"
 )
+
+// HealthChecker verifies connectivity to the database. The pgx pool satisfies
+// this interface.
+type HealthChecker interface {
+	Ping(ctx context.Context) error
+}
 
 // TenantService is the application use-case boundary consumed by the HTTP
 // layer. Implementations are the tenant service; the HTTP layer never touches
@@ -70,23 +77,25 @@ type handler struct {
 	serviceRequests   ServiceRequestService
 	rfps              RFPService
 	equipment         EquipmentService
+	healthChecker     HealthChecker
 	sessionCookieName string
 }
 
 // NewHandler builds the HTTP handler with all routes registered.
-func NewHandler(tenants TenantService, authService AuthService, serviceRequests ServiceRequestService, rfps RFPService, equipment EquipmentService, sessionCookieName string) http.Handler {
+func NewHandler(tenants TenantService, authService AuthService, serviceRequests ServiceRequestService, rfps RFPService, equipment EquipmentService, health HealthChecker, sessionCookieName string) http.Handler {
 	h := &handler{
 		tenants:           tenants,
 		auth:              authService,
 		serviceRequests:   serviceRequests,
 		rfps:              rfps,
 		equipment:         equipment,
+		healthChecker:     health,
 		sessionCookieName: sessionCookieName,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", h.health)
-	mux.HandleFunc("POST /api/v1/tenants", h.createTenant)
+	mux.Handle("POST /api/v1/tenants", h.session(http.HandlerFunc(h.createTenant)))
 	mux.HandleFunc("POST /api/v1/auth/login", h.login)
 	mux.Handle("POST /api/v1/auth/logout", h.session(http.HandlerFunc(h.logout)))
 	mux.Handle("GET /api/v1/auth/me", h.session(http.HandlerFunc(h.me)))
@@ -107,7 +116,15 @@ func NewHandler(tenants TenantService, authService AuthService, serviceRequests 
 	return mux
 }
 
-func (h *handler) health(w http.ResponseWriter, _ *http.Request) {
+func (h *handler) health(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	if err := h.healthChecker.Ping(ctx); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

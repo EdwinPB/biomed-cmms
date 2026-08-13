@@ -58,8 +58,10 @@ func main() {
 	authSvc := authservice.New(authRepo, cfg.SessionTTL)
 
 	server := &http.Server{
-		Addr:              ":" + cfg.APIPort,
-		Handler:           httpapi.CORS(cfg.CORSAllowedOrigin)(httpapi.NewHandler(tenants, authSvc, serviceRequests, rfps, equipmentSvc, cfg.SessionCookieName)),
+		Addr: ":" + cfg.APIPort,
+		Handler: httpapi.LogRequests(log.Default(), httpapi.CORS(cfg.CORSAllowedOrigin)(
+			httpapi.NewHandler(tenants, authSvc, serviceRequests, rfps, equipmentSvc, pool, cfg.SessionCookieName),
+		)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

@@ -96,7 +96,7 @@ const (
 
 func doRequestSvc(t *testing.T, svc ServiceRequestService, method, target, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, testAuthService(), svc, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, testAuthService(), svc, &stubRFPService{}, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
@@ -109,7 +109,7 @@ func doRequestSvc(t *testing.T, svc ServiceRequestService, method, target, body 
 
 func doRequestSvcNoSession(t *testing.T, svc ServiceRequestService, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, testAuthService(), svc, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, testAuthService(), svc, &stubRFPService{}, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -118,7 +118,7 @@ func doRequestSvcNoSession(t *testing.T, svc ServiceRequestService, method, targ
 
 func doRequestSvcWithAuth(t *testing.T, svc ServiceRequestService, method, target, body string, auth *stubAuthService) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, auth, svc, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, auth, svc, &stubRFPService{}, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	addSessionCookie(req)
 	rec := httptest.NewRecorder()

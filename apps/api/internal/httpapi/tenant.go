@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/edwinpolo/biomed-cmms/api/internal/auth"
 	"github.com/edwinpolo/biomed-cmms/api/internal/tenant"
 	"github.com/edwinpolo/biomed-cmms/api/internal/tenant/service"
 )
@@ -26,6 +27,16 @@ type tenantResponse struct {
 }
 
 func (h *handler) createTenant(w http.ResponseWriter, r *http.Request) {
+	role, err := RoleFrom(r.Context())
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if role != auth.RoleAdmin {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	var req createTenantRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")

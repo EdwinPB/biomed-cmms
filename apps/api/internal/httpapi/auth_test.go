@@ -115,7 +115,7 @@ func doAuthRequest(t *testing.T, h http.Handler, method, target, body string) *h
 }
 
 func testAuthHandler(auth AuthService) http.Handler {
-	return NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	return NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 }
 
 func testAuthUser() auth.User {

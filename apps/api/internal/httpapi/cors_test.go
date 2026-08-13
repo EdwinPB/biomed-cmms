@@ -78,7 +78,7 @@ func TestCORSPreflightWithoutOrigin(t *testing.T) {
 }
 
 func TestCORSPreflightRoutedThroughRealHandler(t *testing.T) {
-	h := CORS(testAllowedOrigin)(NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName))
+	h := CORS(testAllowedOrigin)(NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName))
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/requests", nil)
 	req.Header.Set("Origin", testAllowedOrigin)
@@ -93,7 +93,7 @@ func TestCORSPreflightRoutedThroughRealHandler(t *testing.T) {
 }
 
 func TestCORSAddsHeadersToActualResponse(t *testing.T) {
-	h := CORS(testAllowedOrigin)(NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName))
+	h := CORS(testAllowedOrigin)(NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName))
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	req.Header.Set("Origin", testAllowedOrigin)

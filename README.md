@@ -46,21 +46,21 @@ make migrate-down     # roll back one migration
 make migrate-status   # show current version
 ```
 
-## Local development identity
+## Local development authentication
 
-The API authenticates requests via dev-only identity headers. The web app reads
-them from `apps/web/.env.local` (gitignored), so copy `apps/web/.env.example`
-there and fill in a real tenant/user. Tenant is created through the existing API
-endpoint; there is no user endpoint yet, so create the user in SQL:
+The web app authenticates through the API login flow (username/password + server
+session cookie). `apps/web/.env.local` (gitignored) holds the API base URL:
 
 ```sh
-# API running:  curl -s -X POST localhost:8080/api/v1/tenants -H 'Content-Type: application/json' \
-#               -d '{"slug":"local-dev","name":"Local Development"}'
-# Then capture the returned tenant id and run:
-docker exec -i biomed-cmms-postgres psql -U biomed -d biomed_cmms -c \
-  "INSERT INTO users (tenant_id, email, password_hash, full_name)
-   VALUES ('<tenant-id>', 'dev@local.test', 'dev-only', 'Dev User');"
+cp apps/web/.env.example apps/web/.env.local
+# set NEXT_PUBLIC_API_URL=http://localhost:8080
 ```
+
+Then log in at http://localhost:3000/login with a tenant slug, email, and
+password. Users are managed by an admin via the API (`POST /api/v1/users`).
+A scripted production/demo seed (tenant + roles + data) is planned; until it
+lands, reuse the existing local database or create the first admin directly in
+PostgreSQL (bcrypt hash + `role = 'admin'`).
 
 ## Tests
 
@@ -75,8 +75,9 @@ make test
 
 ## Project status
 
-**Sprint 6.3 — Equipment selection.** New tenant-scoped `GET /api/v1/equipment`
-endpoint (repo `ListByTenant` already existed; added minimal `equipment/service`
-pass-through + HTTP route). `/requests/new` now uses an equipment selector
-rendering human-readable "Name — AssetTag" options and submits the real UUID.
-No equipment CRUD, filtering, pagination, or auth yet.
+**Sprint 8.1 — Deployment readiness.** Session/auth and admin user management
+(login, logout, list/create/update users) are implemented with server-side
+sessions. `GET /health` verifies database connectivity; every request is
+logged (method, path, status, duration); `POST /api/v1/tenants` is admin-only;
+the web production build requires `NEXT_PUBLIC_API_URL`. Deployment
+(Docker/Caddy/CI) and the demo seed are the remaining sprints.

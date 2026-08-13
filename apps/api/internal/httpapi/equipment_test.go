@@ -42,7 +42,7 @@ func (f *fakeEquipmentService) ListSelectable(ctx context.Context, tenantID uuid
 
 func doEquipmentSvc(t *testing.T, svc EquipmentService, target string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, &stubRFPService{}, svc, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, &stubRFPService{}, svc, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
@@ -55,7 +55,7 @@ func doEquipmentSvc(t *testing.T, svc EquipmentService, target string, headers .
 
 func doEquipmentSvcNoSession(t *testing.T, svc EquipmentService, target string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, &stubRFPService{}, svc, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, &stubRFPService{}, svc, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -64,7 +64,7 @@ func doEquipmentSvcNoSession(t *testing.T, svc EquipmentService, target string) 
 
 func doEquipmentSvcWithAuth(t *testing.T, svc EquipmentService, target string, auth *stubAuthService) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, svc, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, svc, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	addSessionCookie(req)
 	rec := httptest.NewRecorder()

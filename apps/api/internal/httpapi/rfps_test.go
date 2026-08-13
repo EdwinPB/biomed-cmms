@@ -100,7 +100,7 @@ func (s *stubRFPService) GetRFPByServiceRequest(context.Context, uuid.UUID, uuid
 
 func doRFPSvc(t *testing.T, svc RFPService, method, target, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, svc, &stubEquipmentService{}, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, svc, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	for i := 0; i+1 < len(headers); i += 2 {
 		req.Header.Set(headers[i], headers[i+1])
@@ -113,7 +113,7 @@ func doRFPSvc(t *testing.T, svc RFPService, method, target, body string, headers
 
 func doRFPSvcNoSession(t *testing.T, svc RFPService, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, svc, &stubEquipmentService{}, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, testAuthService(), &stubRequestService{}, svc, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -122,7 +122,7 @@ func doRFPSvcNoSession(t *testing.T, svc RFPService, method, target, body string
 
 func doRFPSvcWithAuth(t *testing.T, svc RFPService, method, target, body string, auth *stubAuthService) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, svc, &stubEquipmentService{}, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, svc, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	addSessionCookie(req)
 	rec := httptest.NewRecorder()

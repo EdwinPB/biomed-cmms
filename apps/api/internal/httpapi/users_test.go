@@ -16,7 +16,7 @@ import (
 
 func doUsersRequest(t *testing.T, auth AuthService, target string, withSession bool) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	if withSession {
 		addSessionCookie(req)
@@ -28,7 +28,7 @@ func doUsersRequest(t *testing.T, auth AuthService, target string, withSession b
 
 func doUsersCreateRequest(t *testing.T, auth AuthService, body string, withSession bool) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(body))
 	if withSession {
 		addSessionCookie(req)
@@ -40,7 +40,7 @@ func doUsersCreateRequest(t *testing.T, auth AuthService, body string, withSessi
 
 func doUsersUpdateRequest(t *testing.T, auth AuthService, id, body string, withSession bool) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	h := NewHandler(&stubTenantService{}, auth, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/"+id, strings.NewReader(body))
 	if withSession {
 		addSessionCookie(req)

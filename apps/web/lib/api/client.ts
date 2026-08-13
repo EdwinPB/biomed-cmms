@@ -39,9 +39,14 @@ async function toApiError(res: Response): Promise<ApiError> {
 }
 
 export function createApiClient(config: ApiClientConfig = {}) {
-  const baseUrl = normalizeBaseUrl(
-    config.baseUrl ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080",
-  );
+  const apiUrl = config.baseUrl ?? process.env.NEXT_PUBLIC_API_URL;
+  if (!apiUrl) {
+    throw new Error(
+      "NEXT_PUBLIC_API_URL is not set. Provide it via apps/web/.env.local " +
+        "(development) or the build environment (production).",
+    );
+  }
+  const baseUrl = normalizeBaseUrl(apiUrl);
 
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);

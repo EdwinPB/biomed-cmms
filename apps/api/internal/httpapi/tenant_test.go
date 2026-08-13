@@ -32,8 +32,16 @@ func (f *fakeTenantService) CreateTenant(ctx context.Context, params tenant.Crea
 
 func doRequest(t *testing.T, svc TenantService, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewHandler(svc, testAuthService(), &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, testSessionCookieName)
+	return doRequestAs(t, svc, method, target, body, testAuthService(), true)
+}
+
+func doRequestAs(t *testing.T, svc TenantService, method, target, body string, auth AuthService, withSession bool) *httptest.ResponseRecorder {
+	t.Helper()
+	h := NewHandler(svc, auth, &stubRequestService{}, &stubRFPService{}, &stubEquipmentService{}, &stubHealthChecker{}, testSessionCookieName)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	if withSession {
+		addSessionCookie(req)
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -69,6 +77,45 @@ func (s *stubEquipmentService) ListEquipment(context.Context, uuid.UUID, auth.Ro
 
 func (s *stubEquipmentService) ListSelectable(context.Context, uuid.UUID) ([]equipment.Equipment, error) {
 	return nil, errors.New("stubEquipmentService: ListSelectable not configured")
+}
+
+func TestCreateTenantUnauthenticated(t *testing.T) {
+	svc := &fakeTenantService{createFn: func(context.Context, tenant.CreateParams) (tenant.Tenant, error) {
+		t.Error("CreateTenant must not be called without a session")
+		return tenant.Tenant{}, nil
+	}}
+
+	rec := doRequestAs(t, svc, http.MethodPost, "/api/v1/tenants", `{"slug":"acme-health","name":"Acme Health"}`, testAuthService(), false)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestCreateTenantNonAdminForbidden(t *testing.T) {
+	for _, role := range []auth.Role{auth.RoleBiomedic, auth.RoleRequester} {
+		t.Run(string(role), func(t *testing.T) {
+			svc := &fakeTenantService{createFn: func(context.Context, tenant.CreateParams) (tenant.Tenant, error) {
+				t.Error("CreateTenant must not be called by a non-admin")
+				return tenant.Tenant{}, nil
+			}}
+
+			authSvc := &stubAuthService{authenticateFn: func(context.Context, string) (auth.Principal, error) {
+				p := testSessionPrincipal()
+				p.Role = role
+				return p, nil
+			}}
+
+			rec := doRequestAs(t, svc, http.MethodPost, "/api/v1/tenants", `{"slug":"acme-health","name":"Acme Health"}`, authSvc, true)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
+			}
+			if got := rec.Body.String(); got != `{"error":"forbidden"}`+"\n" {
+				t.Errorf("body = %q, want %q", got, `{"error":"forbidden"}`+"\n")
+			}
+		})
+	}
 }
 
 func TestCreateTenantSuccess(t *testing.T) {
