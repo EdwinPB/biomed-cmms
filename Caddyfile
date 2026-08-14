@@ -1,0 +1,27 @@
+# Caddy public entrypoint for biomed-cmms.
+#
+# Domains come from the environment (APP_DOMAIN / API_DOMAIN) so this file
+# contains no real domains. Automatic HTTPS (Let's Encrypt) handles TLS on
+# :443; HTTP on :80 redirects to HTTPS.
+#
+# Caddy only proxies; it performs no authentication. Sessions and auth live in
+# the API. Cookies and headers pass through unmodified.
+
+{
+    # Structured access log (JSON, one line per request) to stderr.
+    log {
+        output stderr
+        format json
+    }
+}
+
+{$APP_DOMAIN:app.example.com} {
+    encode zstd gzip
+    reverse_proxy web:3000
+    log
+}
+
+{$API_DOMAIN:api.example.com} {
+    reverse_proxy api:8080
+    log
+}

@@ -1,0 +1,133 @@
+# Production stack: postgres + api + web + caddy.
+#
+# Environment: variables are interpolated from the repository `.env` (or an
+# env-file). Copy `.env.production.example` to `.env` on the server and fill in
+# real values. No secrets are hardcoded here.
+#
+# Migrations are NOT run automatically. Apply them once with:
+#
+#   docker compose --profile tools run --rm migrate
+#
+# The demo seed is NOT run automatically. For a demo/local database, seed it
+# with (repeatable; idempotent):
+#
+#   docker compose --profile tools run --rm seed
+#
+# The seed inserts a demo tenant and users only. It is meant for local and
+# demo environments, not for a real customer instance. See README for the
+# demo credentials and how to override the demo password.
+#
+# Caddy is the public entrypoint: only ports 80 and 443 reach the host. API
+# and postgres stay on the internal Compose network.
+
+name: biomed-cmms-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data-prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # One-off tooling, excluded from `docker compose up` via the "tools"
+  # profile. Both commands share the API's DATABASE_URL and never run
+  # automatically.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      args:
+        BINARY: migrate
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  seed:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      args:
+        BINARY: seed
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      # Optional: defaults to the documented demo password.
+      SEED_DEMO_PASSWORD: ${SEED_DEMO_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      API_PORT: "8080"
+      CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME}
+      SESSION_TTL: ${SESSION_TTL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_started
+      web:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2019/config/ -T 2 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  postgres-data-prod:
+  caddy-data:
+  caddy-config:
