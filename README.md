@@ -58,9 +58,29 @@ cp apps/web/.env.example apps/web/.env.local
 
 Then log in at http://localhost:3000/login with a tenant slug, email, and
 password. Users are managed by an admin via the API (`POST /api/v1/users`).
-A scripted production/demo seed (tenant + roles + data) is planned; until it
-lands, reuse the existing local database or create the first admin directly in
-PostgreSQL (bcrypt hash + `role = 'admin'`).
+
+## Demo seed
+
+`apps/api/cmd/seed` inserts an idempotent demo dataset (1 tenant, 3 users,
+10 equipment, service requests across all statuses, request events, and 2
+RFPs). Run it against the production Compose stack with:
+
+```sh
+docker compose -f docker-compose.prod.yml --env-file .env --profile tools run --rm seed
+```
+
+Credentials (tenant slug `demo`, password `DemoPass!123`):
+
+| email | role |
+| --- | --- |
+| admin@demo.test | admin |
+| requester@demo.test | requester |
+| biomedic@demo.test | biomedic |
+
+Override the password with `SEED_DEMO_PASSWORD` in the environment. The seed is
+repeatable (no duplicates) and atomic (single transaction). It is a DEMO seed
+for local and demo environments only — do not apply it as-is to a real customer
+database. It is never run automatically.
 
 ## Tests
 
@@ -75,9 +95,8 @@ make test
 
 ## Project status
 
-**Sprint 8.1 — Deployment readiness.** Session/auth and admin user management
-(login, logout, list/create/update users) are implemented with server-side
-sessions. `GET /health` verifies database connectivity; every request is
-logged (method, path, status, duration); `POST /api/v1/tenants` is admin-only;
-the web production build requires `NEXT_PUBLIC_API_URL`. Deployment
-(Docker/Caddy/CI) and the demo seed are the remaining sprints.
+**Sprint 8.4 — Deployment + demo seed.** Docker Compose production stack
+(Postgres + API + web + Caddy), Dockerfiles for API/web, DB-aware `/health`,
+and an idempotent demo seed (`cmd/seed`) runnable as a one-off Compose service
+(`docker compose --profile tools run --rm seed`). See "Demo seed" above for
+credentials. Deployment to a real server and CI remain.
