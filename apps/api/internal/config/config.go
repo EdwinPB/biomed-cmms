@@ -17,7 +17,7 @@ type Config struct {
 func Load() Config {
 	return Config{
 		DatabaseURL:       envOr("DATABASE_URL", "postgres://biomed:biomed@localhost:5432/biomed_cmms?sslmode=disable"),
-		APIPort:           envOr("API_PORT", "8080"),
+		APIPort:           envOr("API_PORT", envOr("PORT", "8080")),
 		CORSAllowedOrigin: envOr("CORS_ALLOWED_ORIGIN", "http://localhost:3000"),
 		SessionCookieName: envOr("SESSION_COOKIE_NAME", "session"),
 		SessionTTL:        durationOr("SESSION_TTL", 12*time.Hour),
