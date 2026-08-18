@@ -9,7 +9,6 @@ if (process.env.NODE_ENV === "production" && !process.env.NEXT_PUBLIC_API_URL) {
 
 const nextConfig = {
   reactStrictMode: true,
-  output: "standalone",
 };
 
 module.exports = nextConfig;
